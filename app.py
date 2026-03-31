@@ -742,6 +742,20 @@ def view_all_attendance():
         cursor.execute(query, params)
         attendance_records = cursor.fetchall()
         
+        # Calculate hours worked for each record
+        for record in attendance_records:
+            try:
+                if record['check_in_time'] and record['check_out_time']:
+                    checkin_dt = datetime.strptime(str(record['check_in_time']), "%H:%M:%S")
+                    checkout_dt = datetime.strptime(str(record['check_out_time']), "%H:%M:%S")
+                    time_diff = checkout_dt - checkin_dt
+                    record['hours_worked'] = round(time_diff.total_seconds() / 3600, 1)
+                else:
+                    record['hours_worked'] = None
+            except (ValueError, TypeError) as e:
+                print(f"Error calculating hours for admin record: {e}")
+                record['hours_worked'] = None
+        
         conn.close()
         
         return render_template('admin_attendance.html',
@@ -780,6 +794,20 @@ def employee_report(user_id):
             LIMIT 30
         """,  (user_id,))
         attendance_records = cursor.fetchall()
+        
+        # Calculate hours worked for each record
+        for record in attendance_records:
+            try:
+                if record['check_in_time'] and record['check_out_time']:
+                    checkin_dt = datetime.strptime(str(record['check_in_time']), "%H:%M:%S")
+                    checkout_dt = datetime.strptime(str(record['check_out_time']), "%H:%M:%S")
+                    time_diff = checkout_dt - checkin_dt
+                    record['hours_worked'] = round(time_diff.total_seconds() / 3600, 1)
+                else:
+                    record['hours_worked'] = None
+            except (ValueError, TypeError) as e:
+                print(f"Error calculating hours for employee report: {e}")
+                record['hours_worked'] = None
         
         # Get monthly stats
         cursor.execute("""
@@ -1665,6 +1693,20 @@ def view_attendance():
         checkin_stats = cursor.fetchall()
         
         conn.close()
+        
+        # Calculate hours worked for each record
+        for record in attendance_records:
+            try:
+                if record['check_in_time'] and record['check_out_time']:
+                    checkin_dt = datetime.strptime(str(record['check_in_time']), "%H:%M:%S")
+                    checkout_dt = datetime.strptime(str(record['check_out_time']), "%H:%M:%S")
+                    time_diff = checkout_dt - checkin_dt
+                    record['hours_worked'] = round(time_diff.total_seconds() / 3600, 1)
+                else:
+                    record['hours_worked'] = None
+            except (ValueError, TypeError) as e:
+                print(f"Error calculating hours for record: {e}")
+                record['hours_worked'] = None
         
         # Prepare chart data
         months = [stat['month'] for stat in monthly_stats] if monthly_stats else ['2025-08', '2025-07', '2025-06']

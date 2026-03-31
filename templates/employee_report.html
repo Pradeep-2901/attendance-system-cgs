@@ -201,9 +201,8 @@
                                     </small>
                                 </td>
                                 <td>
-                                    {% if record.check_in_time and record.check_out_time %}
-                                        {% set duration = (record.check_out_time - record.check_in_time).total_seconds() / 3600 %}
-                                        <strong>{{ "%.1f"|format(duration) }} hrs</strong>
+                                    {% if record.hours_worked is not none %}
+                                        <strong>{{ record.hours_worked }} hrs</strong>
                                     {% else %}
                                         <span class="text-muted">Incomplete</span>
                                     {% endif %}
