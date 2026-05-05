@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CGS Attendance System - Login</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .alert {
+      padding: 15px;
+      margin: 15px 0;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    
+    .alert-error {
+      background-color: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    
+    .alert-success {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Alert Messages -->
+    <div id="alertContainer"></div>
+
+    <!-- Employee Login Form -->
+    <form class="form" id="employeeForm">
+      <h2>Employee Login</h2>
+      <div>
+        <input 
+          type="text" 
+          id="employeeUsername" 
+          placeholder="Username" 
+          required 
+          autocomplete="username"
+        />
+      </div>
+      <div class="password-wrapper">
+        <input 
+          type="password" 
+          id="employeePassword" 
+          placeholder="Password" 
+          required 
+          autocomplete="current-password"
+        />
+        <span class="toggle-eye" onclick="togglePassword('employeePassword', this)">👁️</span>
+      </div>
+      <button type="submit" id="employeeLoginBtn">Login</button>
+      <div style="margin-top: 10px; text-align: center;">
+        <small>Admin? <a href="#" onclick="switchToAdmin(); return false;">Click here</a></small>
+      </div>
+    </form>
+
+    <!-- Admin Login Form (Hidden by default) -->
+    <form class="form hidden" id="adminForm">
+      <h2>Admin Login</h2>
+      <div>
+        <input 
+          type="text" 
+          id="adminUsername" 
+          placeholder="Username" 
+          required 
+          autocomplete="username"
+        />
+      </div>
+      <div class="password-wrapper">
+        <input 
+          type="password" 
+          id="adminPassword" 
+          placeholder="Password" 
+          required 
+          autocomplete="current-password"
+        />
+        <span class="toggle-eye" onclick="togglePassword('adminPassword', this)">👁️</span>
+      </div>
+      <button type="submit" id="adminLoginBtn">Login</button>
+      <div style="margin-top: 10px; text-align: center;">
+        <small>Employee? <a href="#" onclick="switchToEmployee(); return false;">Click here</a></small>
+      </div>
+    </form>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/js/api.js"></script>
+  <script src="/js/auth.js"></script>
+  <script>
+    // Get DOM elements
+    const employeeForm = document.getElementById("employeeForm");
+    const adminForm = document.getElementById("adminForm");
+    const employeeUsername = document.getElementById("employeeUsername");
+    const employeePassword = document.getElementById("employeePassword");
+    const adminUsername = document.getElementById("adminUsername");
+    const adminPassword = document.getElementById("adminPassword");
+    const alertContainer = document.getElementById("alertContainer");
+
+    console.log("[Login] Page loaded");
+
+    // Check if already logged in
+    if (isLoggedIn()) {
+      console.log("[Login] User already logged in, redirecting to dashboard");
+      window.location.href = "/dashboard.html";
+    }
+
+    // Toggle form visibility
+    function switchToAdmin() {
+      console.log("[Login] Switching to admin form");
+      employeeForm.classList.add("hidden");
+      adminForm.classList.remove("hidden");
+      adminUsername.focus();
+    }
+
+    function switchToEmployee() {
+      console.log("[Login] Switching to employee form");
+      adminForm.classList.add("hidden");
+      employeeForm.classList.remove("hidden");
+      employeeUsername.focus();
+    }
+
+    // Toggle password visibility
+    function togglePassword(inputId, iconElement) {
+      const input = document.getElementById(inputId);
+      if (input.type === "password") {
+        input.type = "text";
+        iconElement.textContent = "🙈";
+      } else {
+        input.type = "password";
+        iconElement.textContent = "👁️";
+      }
+    }
+
+    // Handle employee login
+    employeeForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      console.log("[Login] Employee form submitted");
+      await handleLogin(employeeUsername.value, employeePassword.value, "employee");
+    });
+
+    // Handle admin login
+    adminForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      console.log("[Login] Admin form submitted");
+      await handleLogin(adminUsername.value, adminPassword.value, "admin");
+    });
+
+    // Login handler
+    async function handleLogin(username, password, role) {
+      console.log(`[Login] Attempting login for ${role}: ${username}`);
+
+      // Validate inputs
+      if (!username || !password) {
+        showError("Please enter username and password");
+        return;
+      }
+
+      // Show loading state
+      const btn = role === "employee" ? document.getElementById("employeeLoginBtn") : document.getElementById("adminLoginBtn");
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Logging in...";
+
+      try {
+        // Call login API
+        const result = await login(username, password, role);
+
+        if (result.success) {
+          console.log("[Login] Login successful, redirecting...");
+          showSuccess("Login successful! Redirecting...");
+          setTimeout(() => {
+            window.location.href = role === "admin" ? "/admin.html" : "/dashboard.html";
+          }, 1000);
+        } else {
+          console.error("[Login] Login failed:", result.message);
+          showError(result.message || "Login failed. Please check credentials.");
+          
+          // Reset password fields
+          if (role === "employee") {
+            employeePassword.value = "";
+            employeeUsername.focus();
+          } else {
+            adminPassword.value = "";
+            adminUsername.focus();
+          }
+        }
+      } catch (error) {
+        console.error("[Login] Unexpected error:", error);
+        showError("An unexpected error occurred: " + error.message);
+      } finally {
+        // Restore button state
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    }
+
+    // Display alert messages
+    function displayAlert(message, type = "error") {
+      const alertDiv = document.createElement("div");
+      alertDiv.className = `alert alert-${type}`;
+      alertDiv.textContent = message;
+      
+      // Clear existing alerts
+      alertContainer.innerHTML = "";
+      alertContainer.appendChild(alertDiv);
+      
+      // Auto-hide
+      setTimeout(() => {
+        alertDiv.remove();
+      }, 5000);
+    }
+
+    // Override showError and showSuccess to use alertContainer
+    const originalShowError = showError;
+    const originalShowSuccess = showSuccess;
+
+    showError = function(message) {
+      console.error("[Alert] Error:", message);
+      displayAlert(message, "error");
+    };
+
+    showSuccess = function(message) {
+      console.log("[Alert] Success:", message);
+      displayAlert(message, "success");
+    };
+  </script>
+</body>
+</html>

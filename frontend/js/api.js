@@ -1,330 +1,290 @@
+// API Configuration
+const API_BASE = "https://cgs-attendance-system.onrender.com";
+
+console.log("[API] Initializing API client with base URL:", API_BASE);
+
 /**
- * API Client for CGS Attendance System
- * Handles all communication with Flask backend
+ * Make API calls with proper error handling and retry logic
  */
-
-const API_BASE = window.location.hostname.includes("netlify.app")
-    ? "https://cgs-attendance-system.onrender.com"  // Production Render backend
-    : "http://localhost:5000";  // Development
-
-console.log(`[API] Base URL: ${API_BASE}`);
-
-// API Request Handler with retry logic for cold starts
-async function apiCall(endpoint, options = {}, retryCount = 0) {
-    const maxRetries = options.retries !== undefined ? options.retries : 2;
-    const url = `${API_BASE}${endpoint}`;
-    
-    const config = {
-        ...options,
-        credentials: "include",  // Essential for cookie-based auth
-        headers: {
-            ...options.headers,
-        }
-    };
-
-    // Add Content-Type for JSON requests
-    if (options.body && typeof options.body === "object" && !options.headers?.["Content-Type"]) {
-        config.headers["Content-Type"] = "application/json";
-        config.body = JSON.stringify(options.body);
+async function apiCall(endpoint, options = {}) {
+  const url = `${API_BASE}${endpoint}`;
+  const method = options.method || "GET";
+  
+  console.log(`[API] ${method} ${url}`);
+  
+  const defaultOptions = {
+    method,
+    credentials: "include", // Include cookies for session auth
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json"
     }
+  };
 
+  const fetchOptions = { ...defaultOptions, ...options };
+  
+  // Retry logic for network failures
+  const maxRetries = 3;
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-        console.log(`[API] ${options.method || "GET"} ${url} (retry ${retryCount}/${maxRetries})`);
-        const response = await fetch(url, config);
-        
-        // Handle unauthorized (401) - redirect to login
-        if (response.status === 401) {
-            console.warn("[API] ⚠️ Unauthorized (401) - clearing session and redirecting to login");
-            localStorage.clear();
-            sessionStorage.clear();
-            // Redirect to login page
-            if (window.location.pathname !== "/index.html") {
-                window.location.href = "/index.html";
-            }
-            return { success: false, error: "Unauthorized", status: 401 };
-        }
-
-        // Handle server errors with retry logic (503, 502)
-        if ((response.status === 503 || response.status === 502) && retryCount < maxRetries) {
-            console.warn(`[API] Server unavailable (${response.status}) - retrying in 2s...`);
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            return apiCall(endpoint, options, retryCount + 1);
-        }
-
-        // Handle server errors
-        if (!response.ok && response.status !== 403) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        // Parse response
-        const contentType = response.headers.get("content-type");
-        let data;
-        
-        if (contentType?.includes("application/json")) {
-            data = await response.json();
-        } else {
-            data = await response.text();
-        }
-
-        if (!response.ok) {
-            throw new Error(data?.message || data || "Unknown error");
-        }
-
-        console.log(`[API] ✅ Response:`, data);
-        return { success: true, data, status: response.status };
-
+      console.log(`[API] Attempt ${attempt}/${maxRetries}`);
+      
+      const response = await fetch(url, fetchOptions);
+      
+      console.log(`[API] Response status: ${response.status}`);
+      
+      // Handle 502/503 (cold start)
+      if ((response.status === 502 || response.status === 503) && attempt < maxRetries) {
+        console.log(`[API] Got ${response.status}, waiting before retry...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      }
+      
+      const data = await response.json();
+      
+      console.log(`[API] Response data:`, data);
+      
+      if (!response.ok && response.status === 401) {
+        console.log("[API] Unauthorized (401) - redirecting to login");
+        window.location.href = "/";
+        return null;
+      }
+      
+      return { success: response.ok, status: response.status, data };
+      
     } catch (error) {
-        console.error(`[API] ❌ Error:`, error);
-        
-        // Retry on network errors (cold start)
-        if (retryCount < maxRetries && error.message.includes('Failed to fetch')) {
-            console.warn(`[API] Network error - retrying in 2s...`);
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            return apiCall(endpoint, options, retryCount + 1);
-        }
-        
-        return { 
-            success: false, 
-            error: error.message,
-            status: 0
-        };
+      lastError = error;
+      console.error(`[API] Attempt ${attempt} failed:`, error.message);
+      
+      if (attempt < maxRetries) {
+        console.log(`[API] Waiting 2s before retry...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
     }
+  }
+  
+  // All retries failed
+  console.error(`[API] All ${maxRetries} attempts failed:`, lastError);
+  
+  if (lastError.message === "Failed to fetch") {
+    return {
+      success: false,
+      error: "Backend unreachable. Check API URL or backend status.",
+      details: lastError.message
+    };
+  }
+  
+  return {
+    success: false,
+    error: lastError.message,
+    details: lastError
+  };
 }
 
-// Authentication APIs
-const AuthAPI = {
-    login: async (username, password, role) => {
-        const response = await apiCall("/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: { username, password, role },
-            retries: 3  // More retries for login during cold start
-        });
-        return response;
-    },
-
-    logout: async () => {
-        return apiCall("/logout", { method: "GET" });
-    },
-
-    getSession: async () => {
-        return apiCall("/test_session", { method: "GET" });
-    },
-
-    checkHealth: async () => {
-        return apiCall("/health", { method: "GET" });
+/**
+ * User Authentication
+ */
+async function login(username, password, role) {
+  console.log(`[API] Login attempt for user: ${username}, role: ${role}`);
+  
+  const result = await apiCall("/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password, role })
+  });
+  
+  if (!result.success) {
+    console.error("[API] Login failed:", result.error);
+    return { success: false, message: result.error || "Login failed" };
+  }
+  
+  if (result.data.success) {
+    console.log("[API] Login successful");
+    // Store user data in localStorage
+    if (result.data.data) {
+      localStorage.setItem("userId", result.data.data.user_id || username);
+      localStorage.setItem("username", result.data.data.username || username);
+      localStorage.setItem("role", role);
+      localStorage.setItem("employeeName", result.data.data.employee_name || "");
     }
-};
+    return { success: true, message: "Login successful" };
+  }
+  
+  console.error("[API] Login returned false:", result.data);
+  return { success: false, message: result.data.message || "Login failed" };
+}
 
-// Employee APIs
-const EmployeeAPI = {
-    getDashboard: async () => {
-        return apiCall("/dashboard", { method: "GET" });
-    },
+/**
+ * Logout
+ */
+async function logout() {
+  console.log("[API] Logout");
+  localStorage.removeItem("userId");
+  localStorage.removeItem("username");
+  localStorage.removeItem("role");
+  localStorage.removeItem("employeeName");
+  window.location.href = "/";
+}
 
-    checkIn: async (latitude, longitude, photo, address) => {
-        return apiCall("/checkin", {
-            method: "POST",
-            body: { latitude, longitude, photo, address }
-        });
-    },
+/**
+ * Check Authentication Status
+ */
+async function checkAuth() {
+  console.log("[API] Checking auth status");
+  const result = await apiCall("/dashboard");
+  return result.success;
+}
 
-    checkOut: async (latitude, longitude, photo, address) => {
-        return apiCall("/checkout", {
-            method: "POST",
-            body: { latitude, longitude, photo, address }
-        });
-    },
+/**
+ * Admin Routes
+ */
+async function getEmployees() {
+  return apiCall("/api/admin/employees");
+}
 
-    getAttendance: async () => {
-        return apiCall("/view_attendance", { method: "GET" });
-    },
+async function getAttendance() {
+  return apiCall("/api/admin/attendance");
+}
 
-    getAttendanceData: async (userId) => {
-        return apiCall(`/admin/employee_attendance_data/${userId}`, { method: "GET" });
-    },
+async function getSettings() {
+  return apiCall("/api/admin/settings");
+}
 
-    requestLeave: async (leaveType, startDate, endDate, reason) => {
-        return apiCall("/request_leave", {
-            method: "POST",
-            body: { leave_type: leaveType, start_date: startDate, end_date: endDate, reason }
-        });
-    },
+async function updateSettings(settingsData) {
+  return apiCall("/api/admin/settings", {
+    method: "PUT",
+    body: JSON.stringify(settingsData)
+  });
+}
 
-    getLeave: async () => {
-        return apiCall("/myleave", { method: "GET" });
-    },
+async function getSites() {
+  return apiCall("/api/admin/sites");
+}
 
-    requestCompOff: async (reason, date) => {
-        return apiCall("/request_compoff", {
-            method: "POST",
-            body: { reason, date }
-        });
-    },
+async function createSite(siteData) {
+  return apiCall("/api/admin/sites", {
+    method: "POST",
+    body: JSON.stringify(siteData)
+  });
+}
 
-    requestRemote: async (remoteAddress, startDate, reason) => {
-        return apiCall("/request-remote/submit", {
-            method: "POST",
-            body: { remote_address: remoteAddress, start_date: startDate, reason }
-        });
-    },
+async function toggleSite(siteId) {
+  return apiCall(`/api/admin/sites/${siteId}/toggle`, {
+    method: "POST"
+  });
+}
 
-    requestVisit: async (siteName, siteAddress, startDate, endDate, reason) => {
-        return apiCall("/request-visit/submit", {
-            method: "POST",
-            body: { site_name: siteName, site_address: siteAddress, start_date: startDate, end_date: endDate, reason }
-        });
-    },
+async function getGeofenceRequests() {
+  return apiCall("/api/admin/geofence-requests");
+}
 
-    requestGeofence: async (latitude, longitude, locationName, reason) => {
-        return apiCall("/request_geofence", {
-            method: "POST",
-            body: { latitude, longitude, location_name: locationName, reason }
-        });
-    }
-};
+async function reviewGeofenceRequest(requestId, decision) {
+  return apiCall(`/api/admin/geofence-requests/${requestId}`, {
+    method: "POST",
+    body: JSON.stringify({ decision })
+  });
+}
 
-// Admin APIs
-const AdminAPI = {
-    getDashboard: async () => {
-        return apiCall("/admin", { method: "GET" });
-    },
+async function getVisitRequests() {
+  return apiCall("/api/admin/visit-requests");
+}
 
-    getEmployees: async () => {
-        return apiCall("/admin/employees", { method: "GET" });
-    },
+async function updateVisitRequest(requestId, action, notes = "") {
+  return apiCall(`/api/admin/visit-requests/${requestId}`, {
+    method: "POST",
+    body: JSON.stringify({ action, admin_notes: notes })
+  });
+}
 
-    addEmployee: async (username, password, employeeName, email, phone, department, role) => {
-        return apiCall("/admin/add_employee", {
-            method: "POST",
-            body: { username, password, employee_name: employeeName, email, phone, department, role }
-        });
-    },
+async function getRemoteRequests() {
+  return apiCall("/api/admin/remote-requests");
+}
 
-    editEmployee: async (userId, username, employeeName, email, phone, department, role) => {
-        return apiCall(`/admin/edit_employee/${userId}`, {
-            method: "POST",
-            body: { username, employee_name: employeeName, email, phone, department, role }
-        });
-    },
+async function updateRemoteRequest(requestId, action, notes = "") {
+  return apiCall(`/api/admin/remote-requests/${requestId}`, {
+    method: "POST",
+    body: JSON.stringify({ action, review_notes: notes })
+  });
+}
 
-    deleteEmployee: async (userId) => {
-        return apiCall(`/admin/delete_employee/${userId}`, { method: "POST" });
-    },
+async function getLeaveRequests() {
+  return apiCall("/api/admin/leave-requests");
+}
 
-    getAttendance: async () => {
-        return apiCall("/admin/attendance", { method: "GET" });
-    },
+async function reviewLeaveRequest(leaveId, decision) {
+  return apiCall(`/api/admin/leave-requests/${leaveId}`, {
+    method: "POST",
+    body: JSON.stringify({ decision })
+  });
+}
 
-    getEmployeeReport: async (userId) => {
-        return apiCall(`/admin/employee_report/${userId}`, { method: "GET" });
-    },
+async function getHolidays(year) {
+  return apiCall(`/api/admin/holidays?year=${year || new Date().getFullYear()}`);
+}
 
-    getCompOffRequests: async () => {
-        return apiCall("/admin/compoff_requests", { method: "GET" });
-    },
+async function createHoliday(holidayDate, holidayName) {
+  return apiCall("/api/admin/holidays", {
+    method: "POST",
+    body: JSON.stringify({ holiday_date: holidayDate, holiday_name: holidayName })
+  });
+}
 
-    reviewCompOff: async (requestId, status, remarks) => {
-        return apiCall(`/admin/review_compoff/${requestId}`, {
-            method: "POST",
-            body: { status, remarks }
-        });
-    },
+async function deleteHoliday(holidayId) {
+  return apiCall(`/api/admin/holidays/${holidayId}`, {
+    method: "DELETE"
+  });
+}
 
-    creditCompOff: async (attendanceId) => {
-        return apiCall(`/admin/credit_compoff/${attendanceId}`, { method: "POST" });
-    },
+/**
+ * Employee Routes
+ */
+async function getEmployeeVisitRequests() {
+  return apiCall("/api/employee/visit-requests");
+}
 
-    getCompOffReport: async () => {
-        return apiCall("/admin/compoff_report", { method: "GET" });
-    },
+async function submitVisitRequest(siteId, visitDate, purpose) {
+  return apiCall("/api/employee/visit-requests", {
+    method: "POST",
+    body: JSON.stringify({ site_id: siteId, visit_date: visitDate, purpose })
+  });
+}
 
-    getCompOffHistory: async (userId) => {
-        return apiCall(`/admin/compoff_history/${userId}`, { method: "GET" });
-    },
+async function getEmployeeRemoteRequests() {
+  return apiCall("/api/employee/remote-requests");
+}
 
-    getLeaveManagement: async () => {
-        return apiCall("/admin/leave_management", { method: "GET" });
-    },
+async function submitRemoteRequest(startDate, endDate, address, lat, lon, reason) {
+  return apiCall("/api/employee/remote-requests", {
+    method: "POST",
+    body: JSON.stringify({
+      start_date: startDate,
+      end_date: endDate,
+      address,
+      lat,
+      lon,
+      reason
+    })
+  });
+}
 
-    reviewLeave: async (leaveId, status, remarks) => {
-        return apiCall(`/admin/review_leave/${leaveId}`, {
-            method: "POST",
-            body: { status, remarks }
-        });
-    },
+/**
+ * Attendance Routes
+ */
+async function checkIn(latitude, longitude, photoData = null) {
+  return apiCall("/checkin", {
+    method: "POST",
+    body: JSON.stringify({
+      latitude,
+      longitude,
+      photo_data: photoData
+    })
+  });
+}
 
-    getHolidays: async () => {
-        return apiCall("/admin/holidays", { method: "GET" });
-    },
-
-    addHoliday: async (holidayName, holidayDate, description) => {
-        return apiCall("/admin/add_holiday", {
-            method: "POST",
-            body: { holiday_name: holidayName, holiday_date: holidayDate, description }
-        });
-    },
-
-    deleteHoliday: async (holidayId) => {
-        return apiCall(`/admin/delete_holiday/${holidayId}`, { method: "POST" });
-    },
-
-    getRemoteRequests: async () => {
-        return apiCall("/admin/remote-requests", { method: "GET" });
-    },
-
-    reviewRemoteRequest: async (requestId, status, remarks) => {
-        return apiCall(`/admin/remote-requests/update/${requestId}`, {
-            method: "POST",
-            body: { status, remarks }
-        });
-    },
-
-    getVisitRequests: async () => {
-        return apiCall("/admin/visit-requests", { method: "GET" });
-    },
-
-    reviewVisitRequest: async (requestId, status, remarks) => {
-        return apiCall(`/admin/visit-requests/update/${requestId}`, {
-            method: "POST",
-            body: { status, remarks }
-        });
-    },
-
-    getSites: async () => {
-        return apiCall("/admin/sites", { method: "GET" });
-    },
-
-    addSite: async (siteName, siteAddress, latitude, longitude) => {
-        return apiCall("/admin/sites/add", {
-            method: "POST",
-            body: { site_name: siteName, site_address: siteAddress, latitude, longitude }
-        });
-    },
-
-    toggleSite: async (siteId) => {
-        return apiCall(`/admin/sites/toggle/${siteId}`, { method: "POST" });
-    },
-
-    getGeofenceRequests: async () => {
-        return apiCall("/admin/geofence_requests", { method: "GET" });
-    },
-
-    reviewGeofence: async (requestId, status, remarks) => {
-        return apiCall(`/admin/review_geofence/${requestId}`, {
-            method: "POST",
-            body: { status, remarks }
-        });
-    },
-
-    getSettings: async () => {
-        return apiCall("/admin/settings", { method: "GET" });
-    },
-
-    updateSettings: async (settingName, settingValue) => {
-        return apiCall("/admin/settings/update", {
-            method: "POST",
-            body: { setting_name: settingName, setting_value: settingValue }
-        });
-    }
-};
+async function checkOut(latitude, longitude) {
+  return apiCall("/checkout", {
+    method: "POST",
+    body: JSON.stringify({ latitude, longitude })
+  });
+}
