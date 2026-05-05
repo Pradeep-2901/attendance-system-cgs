@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Employee Dashboard - CGS Attendance</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .dashboard-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    .user-info {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    
+    .user-info p {
+      margin: 5px 0;
+    }
+    
+    .buttons {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    
+    .btn {
+      padding: 10px 20px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    
+    .btn:hover {
+      background: #0056b3;
+    }
+    
+    .btn-logout {
+      background: #dc3545;
+    }
+    
+    .btn-logout:hover {
+      background: #c82333;
+    }
+    
+    .section {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    
+    .section h3 {
+      margin-top: 0;
+    }
+    
+    .alert {
+      padding: 15px;
+      margin-bottom: 15px;
+      border-radius: 4px;
+    }
+    
+    .alert-error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    
+    .alert-success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard-container">
+    <h1>Employee Dashboard</h1>
+    
+    <!-- User Info -->
+    <div class="user-info" id="userInfo">
+      <p><strong>Welcome!</strong></p>
+      <p id="userNameDisplay"></p>
+      <p id="userRoleDisplay"></p>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="buttons">
+      <button class="btn" onclick="loadDashboard()">Refresh</button>
+      <button class="btn btn-logout" onclick="handleLogout()">Logout</button>
+    </div>
+
+    <!-- Alerts -->
+    <div id="alertContainer"></div>
+
+    <!-- Dashboard Content -->
+    <div id="dashboardContent">
+      <div class="loading">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/js/api.js"></script>
+  <script src="/js/auth.js"></script>
+  <script>
+    console.log("[Dashboard] Page loaded");
+
+    // Require authentication
+    requireAuth();
+
+    // Get current user
+    const user = getCurrentUser();
+    console.log("[Dashboard] Current user:", user);
+
+    // Display user info
+    document.getElementById("userNameDisplay").textContent = `Name: ${user.employeeName || user.username}`;
+    document.getElementById("userRoleDisplay").textContent = `Role: ${user.role}`;
+
+    // Handle logout
+    function handleLogout() {
+      if (confirm("Are you sure you want to logout?")) {
+        logout();
+      }
+    }
+
+    // Load dashboard
+    async function loadDashboard() {
+      const container = document.getElementById("dashboardContent");
+      
+      try {
+        container.innerHTML = '<div class="loading">Loading dashboard...</div>';
+        
+        // Check auth status
+        const authResult = await checkAuth();
+        
+        if (!authResult) {
+          showAlert("Your session has expired. Please login again.", "error");
+          setTimeout(() => {
+            window.location.href = "/login.html";
+          }, 2000);
+          return;
+        }
+
+        // Build dashboard content
+        let html = '<div class="section">';
+        html += '<h3>Welcome to Your Dashboard</h3>';
+        html += '<p>Logged in as: <strong>' + user.username + '</strong></p>';
+        html += '<p>Role: <strong>' + user.role + '</strong></p>';
+        
+        if (user.employeeName) {
+          html += '<p>Name: <strong>' + user.employeeName + '</strong></p>';
+        }
+        
+        html += '<p>User ID: <strong>' + user.userId + '</strong></p>';
+        html += '</div>';
+        
+        // Add quick actions
+        html += '<div class="section">';
+        html += '<h3>Quick Actions</h3>';
+        html += '<div class="buttons">';
+        html += '<button class="btn" onclick="testCheckIn()">Test Check-In API</button>';
+        html += '<button class="btn" onclick="testGetEmployees()">Test Get Employees API</button>';
+        html += '</div>';
+        html += '</div>';
+        
+        container.innerHTML = html;
+        
+      } catch (error) {
+        console.error("[Dashboard] Error loading:", error);
+        showAlert("Error loading dashboard: " + error.message, "error");
+      }
+    }
+
+    // Test APIs
+    async function testCheckIn() {
+      console.log("[Test] Testing check-in API");
+      showAlert("Testing check-in API...", "info");
+      
+      const result = await checkIn(40.7128, -74.0060);
+      console.log("[Test] Check-in result:", result);
+      
+      if (result.success) {
+        showAlert("Check-in successful!", "success");
+      } else {
+        showAlert("Check-in failed: " + (result.error || "Unknown error"), "error");
+      }
+    }
+
+    async function testGetEmployees() {
+      console.log("[Test] Testing get employees API");
+      showAlert("Testing get employees API...", "info");
+      
+      const result = await getEmployees();
+      console.log("[Test] Employees result:", result);
+      
+      if (result.success) {
+        showAlert("Got employees: " + (result.data.data?.length || 0) + " employees", "success");
+      } else {
+        showAlert("Get employees failed: " + (result.error || "Unknown error"), "error");
+      }
+    }
+
+    // Display alert
+    function showAlert(message, type = "error") {
+      const container = document.getElementById("alertContainer");
+      const alertDiv = document.createElement("div");
+      alertDiv.className = `alert alert-${type}`;
+      alertDiv.textContent = message;
+      
+      container.appendChild(alertDiv);
+      
+      setTimeout(() => {
+        alertDiv.remove();
+      }, 5000);
+    }
+
+    // Initial load
+    loadDashboard();
+  </script>
+</body>
+</html>

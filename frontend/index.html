@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CGS Attendance System - Login</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 450px;
+            padding: 20px;
+        }
+
+        .login-card {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .login-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+
+        .login-header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .login-header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .login-body {
+            padding: 40px 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .form-control {
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 12px 15px;
+            font-size: 15px;
+            transition: all 0.3s ease;
+        }
+
+        .form-control:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            outline: none;
+        }
+
+        .password-wrapper {
+            position: relative;
+        }
+
+        .toggle-password {
+            position: absolute;
+            right: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: #667eea;
+            font-size: 18px;
+            user-select: none;
+        }
+
+        .btn-login {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .role-toggle {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 10px;
+        }
+
+        .role-btn {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid transparent;
+            background: transparent;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            color: #666;
+            transition: all 0.3s ease;
+        }
+
+        .role-btn.active {
+            background: white;
+            color: #667eea;
+            border-color: #667eea;
+        }
+
+        .alert {
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border: none;
+        }
+
+        .alert-danger {
+            background: #fee;
+            color: #c33;
+        }
+
+        .alert-success {
+            background: #efe;
+            color: #3c3;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .spinner-border {
+            width: 30px;
+            height: 30px;
+        }
+
+        @media (max-width: 480px) {
+            .login-body {
+                padding: 25px 20px;
+            }
+
+            .login-header h1 {
+                font-size: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <div class="login-header">
+                <h1>CGS Attendance</h1>
+                <p>Employee & Admin Portal</p>
+            </div>
+
+            <div class="login-body">
+                <div id="messageContainer"></div>
+
+                <div class="role-toggle">
+                    <button type="button" class="role-btn active" onclick="switchRole('employee')">
+                        👤 Employee
+                    </button>
+                    <button type="button" class="role-btn" onclick="switchRole('admin')">
+                        🔐 Admin
+                    </button>
+                </div>
+
+                <form id="loginForm" onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" class="form-control" placeholder="Enter your username" required autofocus>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <div class="password-wrapper">
+                            <input type="password" id="password" class="form-control" placeholder="Enter your password" required>
+                            <span class="toggle-password" onclick="togglePasswordVisibility()">👁️</span>
+                        </div>
+                    </div>
+
+                    <input type="hidden" id="roleInput" value="employee">
+
+                    <div class="loading" id="loading">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p class="mt-2">Signing in...</p>
+                    </div>
+
+                    <button type="submit" class="btn-login" id="loginBtn">Sign In</button>
+                </form>
+
+                <div style="margin-top: 20px; text-align: center; color: #999; font-size: 13px;">
+                    <p>Demo Credentials:</p>
+                    <p><strong>Employee:</strong> pradeep / pradeep123</p>
+                    <p><strong>Admin:</strong> francis / francis123</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/api.js"></script>
+    <script src="js/auth.js"></script>
+    <script>
+        // Switch between employee and admin roles
+        function switchRole(role) {
+            document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById('roleInput').value = role;
+        }
+
+        // Toggle password visibility
+        function togglePasswordVisibility() {
+            const input = document.getElementById('password');
+            const toggle = document.querySelector('.toggle-password');
+            
+            if (input.type === 'password') {
+                input.type = 'text';
+                toggle.textContent = '🙈';
+            } else {
+                input.type = 'password';
+                toggle.textContent = '👁️';
+            }
+        }
+
+        // Override handleLogin to use role input
+        async function handleLogin(e) {
+            e.preventDefault();
+
+            const username = document.getElementById("username").value;
+            const password = document.getElementById("password").value;
+            const role = document.getElementById("roleInput").value;
+
+            if (!username || !password) {
+                showMessage("Please enter username and password", "error");
+                return;
+            }
+
+            document.getElementById("loginBtn").disabled = true;
+            document.getElementById("loading").style.display = "block";
+
+            try {
+                const result = await AuthAPI.login(username, password, role);
+
+                if (!result.success) {
+                    showMessage(result.error || "Login failed", "error");
+                    return;
+                }
+
+                // Get session data to confirm login
+                const sessionResult = await AuthAPI.getSession();
+                if (!sessionResult.success) {
+                    showMessage("Failed to establish session", "error");
+                    return;
+                }
+
+                const sessionData = sessionResult.data;
+
+                // Store user info in localStorage
+                const userInfo = {
+                    userId: sessionData.session?.user_id,
+                    username: sessionData.session?.username,
+                    employeeName: sessionData.session?.employee_name,
+                    role: sessionData.session?.role
+                };
+
+                localStorage.setItem("cgs_user", JSON.stringify(userInfo));
+                localStorage.setItem("cgs_role", userInfo.role);
+
+                showMessage(`Welcome ${userInfo.employeeName || username}!`, "success");
+
+                // Redirect based on role
+                setTimeout(() => {
+                    if (userInfo.role === "admin") {
+                        window.location.href = "/admin.html";
+                    } else {
+                        window.location.href = "/dashboard.html";
+                    }
+                }, 1000);
+
+            } catch (error) {
+                showMessage("Login error: " + error.message, "error");
+            } finally {
+                document.getElementById("loginBtn").disabled = false;
+                document.getElementById("loading").style.display = "none";
+            }
+        }
+
+        // Initialize - check if already logged in
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (isLoggedIn()) {
+                const user = getCurrentUser();
+                if (user.role === 'admin') {
+                    window.location.href = '/admin.html';
+                } else {
+                    window.location.href = '/dashboard.html';
+                }
+            }
+        });
+    </script>
+</body>
+</html>

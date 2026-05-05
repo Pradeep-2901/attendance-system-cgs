@@ -1,0 +1,41 @@
+[build]
+publish = "."
+command = "echo 'Static site - no build needed'"
+
+# Single Page Application routing
+[[redirects]]
+from = "/*"
+to = "/index.html"
+status = 200
+
+# Exclude API calls from SPA routing
+[[redirects]]
+from = "/api/*"
+to = ":splat"
+status = 200
+force = false
+
+# Cache control
+[[headers]]
+for = "/*"
+[headers.values]
+Cache-Control = "public, max-age=3600"
+
+# Cache static assets longer
+[[headers]]
+for = "/js/*"
+[headers.values]
+Cache-Control = "public, max-age=31536000"
+
+[[headers]]
+for = "/css/*"
+[headers.values]
+Cache-Control = "public, max-age=31536000"
+
+# CORS headers for API calls
+[[headers]]
+for = "/*"
+[headers.values]
+Access-Control-Allow-Origin = "*"
+Access-Control-Allow-Methods = "GET, POST, PUT, DELETE, OPTIONS"
+Access-Control-Allow-Headers = "Content-Type, X-CSRFToken, X-Requested-With"

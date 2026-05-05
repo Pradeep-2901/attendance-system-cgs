@@ -35,13 +35,20 @@ def after_request(response):
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
     
-    # CORS headers - Permissive for debugging
+    # CORS headers - Accept Netlify, localhost, and specific origins
     origin = request.headers.get('Origin')
-    if origin:
+    allowed_origins = [
+        'https://cgs-attendance.netlify.app',
+        'http://localhost:8000',
+        'http://localhost:3000',
+        'http://localhost:5000'
+    ]
+    
+    if origin in allowed_origins or origin and 'netlify.app' in origin:
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-CSRFToken, X-Requested-With'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-CSRFToken, X-Requested-With, Accept, Authorization'
     
     return response
 
@@ -122,9 +129,12 @@ def admin_required(f):
     from functools import wraps
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if session.get('role') != 'admin':
-            flash('Access denied. Admin privileges required.', 'error')
-            return redirect(url_for('home'))
+        if 'role' not in session or session.get('role') != 'admin':
+            # Return JSON for API clients
+            return jsonify({
+                'success': False,
+                'message': 'Unauthorized: Admin privileges required.'
+            }), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -135,24 +145,14 @@ def employee_required(f):
     def decorated_function(*args, **kwargs):
         # Allow OPTIONS requests to pass through for CORS preflight
         if request.method == 'OPTIONS':
-            return f(*args, **kwargs)
+            return '', 200
 
-        user_id = session.get('user_id')
-        role = session.get('role')
-        print(f"[DECORATOR] Checking employee_required for {request.path}")
-        print(f"[DECORATOR] Session user_id: {user_id}, role: {role}")
-        print(f"[DECORATOR] Request method: {request.method}")
-        print(f"[DECORATOR] Is AJAX: {request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest'}")
-        
-        if role != 'employee':
-            print(f"[DECORATOR] ❌ BLOCKING: Role is '{role}', not 'employee'")
-            # Check if this is an AJAX/JSON request
-            if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.path.startswith(('/checkin', '/checkout')):
-                return jsonify({'status': 'error', 'message': 'Access denied. Employee login required.', 'session_role': role, 'session_user_id': user_id}), 403
-            flash('Access denied. Employee login required.', 'error')
-            return redirect(url_for('home'))
-        
-        print(f"[DECORATOR] ✅ ALLOWED: Proceeding to {f.__name__}")
+        if 'role' not in session or session.get('role') not in ('employee', 'admin'):
+            # Return JSON for API clients
+            return jsonify({
+                'success': False,
+                'message': 'Unauthorized: Login required.'
+            }), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -162,8 +162,11 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'user_id' not in session:
-            flash('Please log in to access this page.', 'error')
-            return redirect(url_for('home'))
+            # Return JSON for API clients
+            return jsonify({
+                'success': False,
+                'message': 'Unauthorized: Login required.'
+            }), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -417,9 +420,18 @@ def home():
 
 @app.route('/login', methods=['POST'])
 def login():
-    username = request.form['username']
-    password = request.form['password']
-    requested_role = request.form.get('role', 'employee')
+    # Accept both JSON and form data
+    if request.is_json:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        requested_role = data.get('role', 'employee')
+        is_json_request = True
+    else:
+        username = request.form.get('username')
+        password = request.form.get('password')
+        requested_role = request.form.get('role', 'employee')
+        is_json_request = False
 
     try:
         conn = get_db_connection()
@@ -445,21 +457,37 @@ def login():
             # Log successful login
             print(f"\n[LOGIN] User logged in: {user['username']} (Role: {user['role']}, ID: {user['user_id']})\n")
 
-            if user['role'] == 'admin':
-                flash(f'Welcome Admin {user["employee_name"] or username}!', 'success')
-                return redirect(url_for('admin_dashboard'))
+            # Return JSON for API requests, redirect for form submissions
+            if is_json_request:
+                return jsonify({
+                    'success': True,
+                    'user_id': user['user_id'],
+                    'username': user['username'],
+                    'role': user['role'],
+                    'employee_name': user['employee_name'] or username
+                })
             else:
                 flash(f'Welcome {user["employee_name"] or username}!', 'success')
-                return redirect(url_for('dashboard'))
+                if user['role'] == 'admin':
+                    return redirect(url_for('admin_dashboard'))
+                else:
+                    return redirect(url_for('dashboard'))
         else:
             conn.close()
-            flash(f'Invalid {requested_role} credentials!', 'error')
-            return render_template('index.html')
+            # Return JSON for API requests, render template for form submissions
+            if is_json_request:
+                return jsonify({'success': False, 'message': f'Invalid {requested_role} credentials!'}), 401
+            else:
+                flash(f'Invalid {requested_role} credentials!', 'error')
+                return render_template('index.html')
             
     except Exception as e:
         print(f"Login error: {e}")
-        flash('Login failed. Please try again.', 'error')
-        return render_template('index.html')
+        if is_json_request:
+            return jsonify({'success': False, 'message': 'Login failed. Please try again.'}), 500
+        else:
+            flash('Login failed. Please try again.', 'error')
+            return render_template('index.html')
 
 @app.route('/logout')
 def logout():
@@ -495,20 +523,28 @@ def admin_dashboard():
         """)
         recent_attendance = cursor.fetchall()
         conn.close()
-        return render_template('admin_dashboard.html',
-                             username=session['username'],
-                             total_employees=total_employees,
-                             today_attendance=today_attendance,
-                             recent_attendance=recent_attendance,
-                             pending_compoff=pending_compoff)
+        
+        # Return JSON for API clients
+        return jsonify({
+            'success': True,
+            'data': {
+                'username': session.get('username'),
+                'total_employees': total_employees,
+                'today_attendance': today_attendance,
+                'recent_attendance': recent_attendance,
+                'pending_compoff': pending_compoff
+            }
+        })
     except Exception as e:
         print(f"Admin dashboard error: {e}")
-        flash(f'Dashboard error: {str(e)}', 'error')
-        return redirect(url_for('home'))
+        return jsonify({
+            'success': False,
+            'message': f'Dashboard error: {str(e)}'
+        }), 500
 
-@app.route('/admin/employees')
+@app.route('/api/admin/employees', methods=['GET'])
 @admin_required
-def manage_employees():
+def get_employees():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -521,188 +557,224 @@ def manage_employees():
         employees = cursor.fetchall()
         conn.close()
         
-        return render_template('manage_employees.html',
-                             username=session['username'],
-                             employees=employees)
+        # Return JSON for API clients
+        return jsonify({
+            'success': True,
+            'data': employees
+        })
     except Exception as e:
-        print(f"Manage employees error: {e}")
-        flash(f'Error loading employees: {str(e)}', 'error')
-        return redirect(url_for('admin_dashboard'))
+        print(f"Get employees error: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error loading employees: {str(e)}'
+        }), 500
 
-@app.route('/admin/add_employee', methods=['GET', 'POST'])
+@app.route('/api/admin/employees', methods=['POST'])
 @admin_required
-def add_employee():
-    if request.method == 'POST':
-        try:
-            name = request.form['name'].strip()
-            username = request.form['username'].strip()
-            password = request.form['password']
-            
-            if not name or not username or not password:
-                flash('Name, username, and password are required!', 'error')
-                return render_template('add_employee.html', username=session['username'])
-            
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Check if username already exists
-            cursor.execute("SELECT username FROM users WHERE username = ?",  (username,))
-            if cursor.fetchone():
-                flash('Username already exists! Please choose a different username.', 'error')
-                conn.close()
-                return render_template('add_employee.html', username=session['username'])
-            
-            # Generate next user_id
-            cursor.execute("SELECT MAX(CAST(user_id AS UNSIGNED)) FROM users WHERE user_id REGEXP '^[0-9]+$'")
-            result = cursor.fetchone()
-            next_id = str((result[0] or 0) + 1)
-            
-            # Get geofencing fields
-            work_mode = request.form.get('work_mode', 'Office')
-            remote_address = request.form.get('remote_address', '').strip()
-            
-            # Geocode remote address if provided
-            remote_lat = remote_lon = None
-            if work_mode == 'Remote' and remote_address:
-                geocode_result = geocode_address(remote_address)
-                if geocode_result:
-                    remote_lat = geocode_result['lat']
-                    remote_lon = geocode_result['lon']
-                else:
-                    flash('⚠️ Unable to geocode remote address. Employee added, but remote location needs manual configuration.', 'warning')
-            
-            # Insert new employee with geofencing support
-            hashed_password = generate_password_hash(password)
-            cursor.execute("""
-                INSERT INTO users (user_id, employee_name, username, password, role, work_mode, 
-                                 remote_address, remote_lat, remote_lon) 
-                VALUES (?, ?, ?, ?, 'employee', ?, ?, ?, ?)
-            """,  (next_id, name, username, hashed_password, work_mode, remote_address, remote_lat, remote_lon))
-            
-            conn.commit()
-            conn.close()
-            
-            flash(f'Employee {name} added successfully with ID: {next_id}!', 'success')
-            return redirect(url_for('manage_employees'))
-            
-        except Exception as e:
-            print(f"Add employee error: {e}")
-            flash(f'Error adding employee: {str(e)}', 'error')
-    
-    return render_template('add_employee.html', username=session['username'])
-
-@app.route('/admin/delete_employee/<user_id>')
-@admin_required
-def delete_employee(user_id):
+def create_employee():
+    """Create a new employee"""
     try:
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
+        
+        name = data.get('name', '').strip()
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+        work_mode = data.get('work_mode', 'Office')
+        remote_address = data.get('remote_address', '').strip()
+        
+        if not name or not username or not password:
+            return jsonify({'success': False, 'message': 'Name, username, and password are required!'}), 400
+        
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get employee name before deletion - user_id is string
-        cursor.execute("SELECT name FROM users WHERE user_id = ? AND role = 'employee'",  (user_id,))
-        employee = cursor.fetchone()
+        # Check if username already exists
+        cursor.execute("SELECT username FROM users WHERE username = ?", (username,))
+        if cursor.fetchone():
+            conn.close()
+            return jsonify({'success': False, 'message': 'Username already exists! Please choose a different username.'}), 400
         
-        if not employee:
-            flash('Employee not found!', 'error')
-            return redirect(url_for('manage_employees'))
+        # Generate next user_id
+        cursor.execute("SELECT MAX(CAST(user_id AS UNSIGNED)) FROM users WHERE user_id REGEXP '^[0-9]+$'")
+        result = cursor.fetchone()
+        next_id = str((result[0] or 0) + 1)
         
-        # Delete employee's attendance records first (foreign key constraint)
-        cursor.execute("DELETE FROM attendance WHERE user_id = ?",  (user_id,))
+        # Geocode remote address if provided
+        remote_lat = remote_lon = None
+        geocode_message = None
+        if work_mode == 'Remote' and remote_address:
+            geocode_result = geocode_address(remote_address)
+            if geocode_result:
+                remote_lat = geocode_result['lat']
+                remote_lon = geocode_result['lon']
+            else:
+                geocode_message = 'Employee added, but unable to geocode remote address. Manual configuration needed.'
         
-        # Delete employee
-        cursor.execute("DELETE FROM users WHERE user_id = ? AND role = 'employee'",  (user_id,))
+        # Insert new employee with geofencing support
+        hashed_password = generate_password_hash(password)
+        cursor.execute("""
+            INSERT INTO users (user_id, employee_name, username, password, role, work_mode, 
+                             remote_address, remote_lat, remote_lon) 
+            VALUES (?, ?, ?, ?, 'employee', ?, ?, ?, ?)
+        """, (next_id, name, username, hashed_password, work_mode, remote_address, remote_lat, remote_lon))
         
         conn.commit()
         conn.close()
         
-        flash(f'Employee {employee["name"]} deleted successfully!', 'success')
+        message = f'Employee {name} added successfully with ID: {next_id}!'
+        if geocode_message:
+            message += f' {geocode_message}'
+        
+        return jsonify({'success': True, 'message': message, 'employee_id': next_id}), 201
         
     except Exception as e:
-        print(f"Delete employee error: {e}")
-        flash(f'Error deleting employee: {str(e)}', 'error')
-    
-    return redirect(url_for('manage_employees'))
+        print(f"Create employee error: {e}")
+        return jsonify({'success': False, 'message': f'Error adding employee: {str(e)}'}), 500
 
-@app.route('/admin/edit_employee/<user_id>', methods=['GET', 'POST'])
+@app.route('/api/admin/employees/<user_id>', methods=['DELETE'])
 @admin_required
-def edit_employee(user_id):
+def delete_employee(user_id):
+    """Delete an employee"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        if request.method == 'POST':
-            name = request.form['name'].strip()
-            username = request.form['username'].strip()
-            password = request.form['password'].strip()
-            
-            if not name or not username:
-                flash('Name and username are required!', 'error')
-                return redirect(url_for('edit_employee', user_id=user_id))
-            
-            # Check if username exists for other users
-            cursor.execute("SELECT user_id FROM users WHERE username = ? AND user_id != ?",  (username, user_id))
-            if cursor.fetchone():
-                flash('Username already exists! Please choose a different username.', 'error')
-                return redirect(url_for('edit_employee', user_id=user_id))
-            
-            # Get geofencing fields
-            work_mode = request.form.get('work_mode', 'Office')
-            remote_address = request.form.get('remote_address', '').strip()
-            
-            # Geocode remote address if provided
-            remote_lat = remote_lon = None
-            if work_mode == 'Remote' and remote_address:
-                geocode_result = geocode_address(remote_address)
-                if geocode_result:
-                    remote_lat = geocode_result['lat']
-                    remote_lon = geocode_result['lon']
-                else:
-                    flash('⚠️ Unable to geocode remote address. Employee updated, but remote location needs manual configuration.', 'warning')
-            
-            # Update employee with geofencing support
-            if password:
-                hashed_password = generate_password_hash(password)
-                cursor.execute("""
-                    UPDATE users 
-                    SET name = ?, username = ?, password = ?, work_mode = ?,
-                        remote_address = ?, remote_lat = ?, remote_lon = ?
-                    WHERE user_id = ? AND role = 'employee'
-                """,  (name, username, hashed_password, work_mode, remote_address, remote_lat, remote_lon, user_id))
-            else:
-                cursor.execute("""
-                    UPDATE users 
-                    SET name = ?, username = ?, work_mode = ?,
-                        remote_address = ?, remote_lat = ?, remote_lon = ?
-                    WHERE user_id = ? AND role = 'employee'
-                """,  (name, username, work_mode, remote_address, remote_lat, remote_lon, user_id))
-            
-            conn.commit()
-            conn.close()
-            
-            flash(f'Employee {name} updated successfully!', 'success')
-            return redirect(url_for('manage_employees'))
+        # Get employee name before deletion
+        cursor.execute("SELECT employee_name FROM users WHERE user_id = ? AND role = 'employee'", (user_id,))
+        employee = cursor.fetchone()
         
-        # GET request - show form
-        cursor.execute("SELECT * FROM users WHERE user_id = ? AND role = 'employee'",  (user_id,))
+        if not employee:
+            conn.close()
+            return jsonify({'success': False, 'message': 'Employee not found!'}), 404
+        
+        # Delete employee's attendance records first (foreign key constraint)
+        cursor.execute("DELETE FROM attendance WHERE user_id = ?", (user_id,))
+        
+        # Delete employee
+        cursor.execute("DELETE FROM users WHERE user_id = ? AND role = 'employee'", (user_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        employee_name = employee[0] if isinstance(employee, tuple) else employee.get('employee_name', 'Unknown')
+        return jsonify({'success': True, 'message': f'Employee {employee_name} deleted successfully!'}), 200
+        
+    except Exception as e:
+        print(f"Delete employee error: {e}")
+        return jsonify({'success': False, 'message': f'Error deleting employee: {str(e)}'}), 500
+
+@app.route('/api/admin/employees/<user_id>', methods=['GET'])
+@admin_required
+def get_employee_details(user_id):
+    """Get employee details"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM users WHERE user_id = ? AND role = 'employee'", (user_id,))
         employee = cursor.fetchone()
         conn.close()
         
         if not employee:
-            flash('Employee not found!', 'error')
-            return redirect(url_for('manage_employees'))
+            return jsonify({'success': False, 'message': 'Employee not found!'}), 404
         
-        return render_template('edit_employee.html',
-                             username=session['username'],
-                             employee=employee)
+        # Convert dict-like row to dict
+        if isinstance(employee, dict):
+            employee_data = employee
+        else:
+            # If it's a tuple, we need to map it properly
+            employee_data = {
+                'user_id': employee[0],
+                'employee_name': employee[1],
+                'username': employee[2],
+                'role': employee[3],
+                'work_mode': employee[4],
+                'remote_address': employee[5],
+                'remote_lat': employee[6],
+                'remote_lon': employee[7]
+            }
+        
+        return jsonify({'success': True, 'data': employee_data}), 200
         
     except Exception as e:
-        print(f"Edit employee error: {e}")
-        flash(f'Error: {str(e)}', 'error')
-        return redirect(url_for('manage_employees'))
+        print(f"Get employee error: {e}")
+        return jsonify({'success': False, 'message': f'Error fetching employee: {str(e)}'}), 500
 
-@app.route('/admin/attendance')
+@app.route('/api/admin/employees/<user_id>', methods=['PUT'])
 @admin_required
-def view_all_attendance():
+def update_employee(user_id):
+    """Update employee details"""
+    try:
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
+        
+        name = data.get('name', '').strip()
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        work_mode = data.get('work_mode', 'Office')
+        remote_address = data.get('remote_address', '').strip()
+        
+        if not name or not username:
+            return jsonify({'success': False, 'message': 'Name and username are required!'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if username exists for other users
+        cursor.execute("SELECT user_id FROM users WHERE username = ? AND user_id != ?", (username, user_id))
+        if cursor.fetchone():
+            conn.close()
+            return jsonify({'success': False, 'message': 'Username already exists! Please choose a different username.'}), 400
+        
+        # Geocode remote address if provided
+        remote_lat = remote_lon = None
+        geocode_message = None
+        if work_mode == 'Remote' and remote_address:
+            geocode_result = geocode_address(remote_address)
+            if geocode_result:
+                remote_lat = geocode_result['lat']
+                remote_lon = geocode_result['lon']
+            else:
+                geocode_message = 'Employee updated, but unable to geocode remote address. Manual configuration needed.'
+        
+        # Update employee
+        if password:
+            hashed_password = generate_password_hash(password)
+            cursor.execute("""
+                UPDATE users 
+                SET employee_name = ?, username = ?, password = ?, work_mode = ?,
+                    remote_address = ?, remote_lat = ?, remote_lon = ?
+                WHERE user_id = ? AND role = 'employee'
+            """, (name, username, hashed_password, work_mode, remote_address, remote_lat, remote_lon, user_id))
+        else:
+            cursor.execute("""
+                UPDATE users 
+                SET employee_name = ?, username = ?, work_mode = ?,
+                    remote_address = ?, remote_lat = ?, remote_lon = ?
+                WHERE user_id = ? AND role = 'employee'
+            """, (name, username, work_mode, remote_address, remote_lat, remote_lon, user_id))
+        
+        conn.commit()
+        conn.close()
+        
+        message = f'Employee {name} updated successfully!'
+        if geocode_message:
+            message += f' {geocode_message}'
+        
+        return jsonify({'success': True, 'message': message}), 200
+        
+    except Exception as e:
+        print(f"Update employee error: {e}")
+        return jsonify({'success': False, 'message': f'Error updating employee: {str(e)}'}), 500
+
+@app.route('/api/admin/attendance', methods=['GET'])
+@admin_required
+def get_attendance():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -727,7 +799,7 @@ def view_all_attendance():
         
         if selected_employee:
             query += " AND a.user_id = ?"
-            params.append(selected_employee)  # Keep as string for varchar(10)
+            params.append(selected_employee)
         
         if start_date:
             query += " AND a.date >= ?"
@@ -758,33 +830,40 @@ def view_all_attendance():
         
         conn.close()
         
-        return render_template('admin_attendance.html',
-                             username=session['username'],
-                             employees=employees,
-                             attendance_records=attendance_records,
-                             selected_employee=selected_employee,
-                             start_date=start_date,
-                             end_date=end_date)
+        # Return JSON for API clients
+        return jsonify({
+            'success': True,
+            'data': {
+                'employees': employees,
+                'attendance_records': attendance_records,
+                'selected_employee': selected_employee,
+                'start_date': start_date,
+                'end_date': end_date
+            }
+        })
         
     except Exception as e:
         print(f"View attendance error: {e}")
-        flash(f'Error loading attendance: {str(e)}', 'error')
-        return redirect(url_for('admin_dashboard'))
+        return jsonify({
+            'success': False,
+            'message': f'Error loading attendance: {str(e)}'
+        }), 500
 
-@app.route('/admin/employee_report/<user_id>')
+@app.route('/api/admin/employees/<user_id>/report', methods=['GET'])
 @admin_required
-def employee_report(user_id):
+def get_employee_report(user_id):
+    """Get employee attendance report"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get employee details - user_id is string
-        cursor.execute("SELECT * FROM users WHERE user_id = ? AND role = 'employee'",  (user_id,))
+        # Get employee details
+        cursor.execute("SELECT * FROM users WHERE user_id = ? AND role = 'employee'", (user_id,))
         employee = cursor.fetchone()
         
         if not employee:
-            flash('Employee not found!', 'error')
-            return redirect(url_for('view_all_attendance'))
+            conn.close()
+            return jsonify({'success': False, 'message': 'Employee not found!'}), 404
         
         # Get attendance records for last 30 days
         cursor.execute("""
@@ -792,22 +871,33 @@ def employee_report(user_id):
             WHERE user_id = ? 
             ORDER BY date DESC 
             LIMIT 30
-        """,  (user_id,))
+        """, (user_id,))
         attendance_records = cursor.fetchall()
         
         # Calculate hours worked for each record
+        processed_records = []
         for record in attendance_records:
             try:
-                if record['check_in_time'] and record['check_out_time']:
-                    checkin_dt = datetime.strptime(str(record['check_in_time']), "%H:%M:%S")
-                    checkout_dt = datetime.strptime(str(record['check_out_time']), "%H:%M:%S")
+                record_dict = dict(record) if isinstance(record, dict) else {
+                    'date': record[1],
+                    'check_in_time': record[2],
+                    'check_out_time': record[3],
+                    'status': record[4]
+                }
+                
+                if record_dict.get('check_in_time') and record_dict.get('check_out_time'):
+                    checkin_dt = datetime.strptime(str(record_dict['check_in_time']), "%H:%M:%S")
+                    checkout_dt = datetime.strptime(str(record_dict['check_out_time']), "%H:%M:%S")
                     time_diff = checkout_dt - checkin_dt
-                    record['hours_worked'] = round(time_diff.total_seconds() / 3600, 1)
+                    record_dict['hours_worked'] = round(time_diff.total_seconds() / 3600, 1)
                 else:
-                    record['hours_worked'] = None
+                    record_dict['hours_worked'] = None
+                
+                processed_records.append(record_dict)
             except (ValueError, TypeError) as e:
                 print(f"Error calculating hours for employee report: {e}")
-                record['hours_worked'] = None
+                record_dict['hours_worked'] = None
+                processed_records.append(record_dict)
         
         # Get monthly stats
         cursor.execute("""
@@ -820,13 +910,13 @@ def employee_report(user_id):
             GROUP BY strftime('%Y-%m', date)
             ORDER BY month DESC
             LIMIT 6
-        """,  (user_id,))
+        """, (user_id,))
         monthly_stats = cursor.fetchall()
         
         # Prepare chart data
-        months = [stat['month'] for stat in monthly_stats] if monthly_stats else ['2025-08']
-        attendance_counts = [stat['days_present'] for stat in monthly_stats] if monthly_stats else [0]
-        avg_checkin_hours = [float(stat['avg_checkin_hour']) if stat['avg_checkin_hour'] else 9.0 for stat in monthly_stats] if monthly_stats else [9.0]
+        months = [stat[0] for stat in monthly_stats] if monthly_stats else ['2025-08']
+        attendance_counts = [stat[1] for stat in monthly_stats] if monthly_stats else [0]
+        avg_checkin_hours = [float(stat[2]) if stat[2] else 9.0 for stat in monthly_stats] if monthly_stats else [9.0]
         
         chart_data = {
             'months': months,
@@ -836,20 +926,29 @@ def employee_report(user_id):
         
         conn.close()
         
-        return render_template('employee_report.html',
-                             username=session['username'],
-                             employee=employee,
-                             attendance_records=attendance_records,
-                             chart_data=chart_data)
+        employee_data = dict(employee) if isinstance(employee, dict) else {
+            'user_id': employee[0],
+            'employee_name': employee[1],
+            'username': employee[2],
+            'role': employee[3]
+        }
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'employee': employee_data,
+                'attendance_records': processed_records,
+                'chart_data': chart_data
+            }
+        }), 200
         
     except Exception as e:
         print(f"Employee report error: {e}")
-        flash(f'Error: {str(e)}', 'error')
-        return redirect(url_for('view_all_attendance'))
+        return jsonify({'success': False, 'message': f'Error generating report: {str(e)}'}), 500
 
-@app.route('/admin/geofence_requests')
+@app.route('/api/admin/geofence-requests', methods=['GET'])
 @admin_required
-def admin_geofence_requests():
+def get_geofence_requests():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -868,9 +967,9 @@ def admin_geofence_requests():
         flash(f'Error: {str(e)}', 'error')
         return redirect(url_for('admin_dashboard'))
 
-@app.route('/admin/review_geofence/<int:request_id>', methods=['POST'])
+@app.route('/api/admin/geofence-requests/<int:request_id>', methods=['POST', 'PUT'])
 @admin_required
-def admin_review_geofence(request_id):
+def review_geofence_request(request_id):
     decision = request.form.get('decision')
     admin_id = session.get('user_id')
     if decision not in ('approve','reject'):
@@ -902,10 +1001,10 @@ def admin_review_geofence(request_id):
 
 # ====================== ADMIN GEOFENCING ROUTES ======================
 
-@app.route('/admin/settings')
+@app.route('/api/admin/settings', methods=['GET'])
 @admin_required
-def admin_settings():
-    """Admin company settings page"""
+def get_admin_settings():
+    """Get company settings"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -914,26 +1013,28 @@ def admin_settings():
         cursor.execute("SELECT * FROM company_settings ORDER BY setting_name")
         settings = cursor.fetchall()
         
-        # Convert to dict for easier template access
-        settings_dict = {setting['setting_name']: setting['setting_value'] for setting in settings}
-        
         conn.close()
-        return render_template('admin_settings.html', settings=settings_dict)
+        return jsonify({'success': True, 'data': settings}), 200
     except Exception as e:
-        flash(f'Error loading settings: {str(e)}', 'error')
-        return redirect(url_for('admin_dashboard'))
+        return jsonify({'success': False, 'message': f'Error loading settings: {str(e)}'}), 500
 
-@app.route('/admin/settings/update', methods=['POST'])
+@app.route('/api/admin/settings', methods=['PUT', 'POST'])
 @admin_required
-def update_company_settings():
+def update_admin_settings():
     """Update company settings"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        office_address = request.form.get('office_address', '').strip()
-        office_radius = request.form.get('office_radius', '200')
-        geofencing_enabled = 'geofencing_enabled' in request.form
+        if request.is_json:
+            data = request.get_json()
+            office_address = data.get('office_address', '').strip()
+            office_radius = data.get('office_radius', '200')
+            geofencing_enabled = data.get('geofencing_enabled', False)
+        else:
+            office_address = request.form.get('office_address', '').strip()
+            office_radius = request.form.get('office_radius', '200')
+            geofencing_enabled = 'geofencing_enabled' in request.form
         
         # Update basic settings
         cursor.execute("""
@@ -955,6 +1056,7 @@ def update_company_settings():
         """,  ('true' if geofencing_enabled else 'false',))
         
         # Geocode office address if provided
+        geocode_message = None
         if office_address:
             geocode_result = geocode_address(office_address)
             if geocode_result:
@@ -970,24 +1072,24 @@ def update_company_settings():
                     WHERE setting_name = 'office_lon'
                 """,  (str(geocode_result['lon']),))
                 
-                flash(f'✅ Settings updated! Office coordinates: {geocode_result["lat"]:.6f}, {geocode_result["lon"]:.6f}', 'success')
+                geocode_message = f'Settings updated! Office coordinates: {geocode_result["lat"]:.6f}, {geocode_result["lon"]:.6f}'
             else:
-                flash('⚠️ Settings updated, but unable to geocode office address. Please verify the address.', 'warning')
+                geocode_message = 'Settings updated, but unable to geocode office address. Please verify the address.'
         else:
-            flash('✅ Settings updated successfully!', 'success')
+            geocode_message = 'Settings updated successfully!'
         
         conn.commit()
         conn.close()
         
+        return jsonify({'success': True, 'message': geocode_message}), 200
+        
     except Exception as e:
-        flash(f'Error updating settings: {str(e)}', 'error')
-    
-    return redirect(url_for('admin_settings'))
+        return jsonify({'success': False, 'message': f'Error updating settings: {str(e)}'}), 500
 
-@app.route('/admin/sites')
+@app.route('/api/admin/sites', methods=['GET'])
 @admin_required
-def admin_sites():
-    """Admin sites management page"""
+def get_sites():
+    """Get all sites"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1002,52 +1104,64 @@ def admin_sites():
         """)
         sites = cursor.fetchall()
         conn.close()
-        return render_template('admin_sites.html', sites=sites)
-    except Exception as e:
-        flash(f'Error loading sites: {str(e)}', 'error')
-        return redirect(url_for('admin_dashboard'))
-
-@app.route('/admin/sites/add', methods=['POST'])
-@admin_required
-def add_site():
-    """Add new site"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
         
-        site_name = request.form.get('site_name', '').strip()
-        site_address = request.form.get('site_address', '').strip()
-        site_radius = int(request.form.get('site_radius', 200))
-        site_description = request.form.get('site_description', '').strip()
+        sites_list = [dict(site) if isinstance(site, dict) else {
+            'id': site[0],
+            'site_name': site[1],
+            'site_address': site[2],
+            'site_lat': site[3],
+            'site_lon': site[4],
+            'site_radius': site[5],
+            'site_description': site[6],
+            'is_active': site[7],
+            'total_visits': site[8],
+            'pending_visits': site[9]
+        } for site in sites]
+        
+        return jsonify({'success': True, 'data': sites_list}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error loading sites: {str(e)}'}), 500
+
+@app.route('/api/admin/sites', methods=['POST'])
+@admin_required
+def create_site():
+    """Create new site"""
+    try:
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
+        
+        site_name = data.get('site_name', '').strip()
+        site_address = data.get('site_address', '').strip()
+        site_radius = int(data.get('site_radius', 200))
+        site_description = data.get('site_description', '').strip()
         
         if not site_name or not site_address:
-            conn.close()
-            flash('Site name and address are required', 'error')
-            return redirect(url_for('admin_sites'))
+            return jsonify({'success': False, 'message': 'Site name and address are required'}), 400
         
         # Geocode the address
         geocode_result = geocode_address(site_address)
         if not geocode_result:
-            conn.close()
-            flash('Unable to geocode the address. Please verify and try again.', 'error')
-            return redirect(url_for('admin_sites'))
+            return jsonify({'success': False, 'message': 'Unable to geocode the address. Please verify and try again.'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
         cursor.execute("""
             INSERT INTO sites (site_name, site_address, site_lat, site_lon, site_radius, site_description)
             VALUES (?, ?, ?, ?, ?, ?)
-        """,  (site_name, site_address, geocode_result['lat'], geocode_result['lon'], site_radius, site_description))
+        """, (site_name, site_address, geocode_result['lat'], geocode_result['lon'], site_radius, site_description))
         
         conn.commit()
         conn.close()
         
-        flash(f'✅ Site "{site_name}" added successfully!', 'success')
+        return jsonify({'success': True, 'message': f'Site "{site_name}" added successfully!'}), 201
         
     except Exception as e:
-        flash(f'Error adding site: {str(e)}', 'error')
-    
-    return redirect(url_for('admin_sites'))
+        return jsonify({'success': False, 'message': f'Error adding site: {str(e)}'}), 500
 
-@app.route('/admin/sites/toggle/<int:site_id>')
+@app.route('/api/admin/sites/<int:site_id>/toggle', methods=['POST'])
 @admin_required
 def toggle_site_status(site_id):
     """Toggle site active/inactive status"""
@@ -1055,30 +1169,30 @@ def toggle_site_status(site_id):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT is_active FROM sites WHERE id = ?",  (site_id,))
+        cursor.execute("SELECT is_active FROM sites WHERE id = ?", (site_id,))
         site = cursor.fetchone()
         
-        if site:
-            new_status = not site['is_active']
-            cursor.execute("UPDATE sites SET is_active = ? WHERE id = ?",  (new_status, site_id))
-            conn.commit()
-            
-            status_text = "activated" if new_status else "deactivated"
-            flash(f'Site {status_text} successfully!', 'success')
-        else:
-            flash('Site not found', 'error')
+        if not site:
+            conn.close()
+            return jsonify({'success': False, 'message': 'Site not found'}), 404
         
+        current_status = site[0] if isinstance(site, tuple) else site.get('is_active')
+        new_status = not current_status
+        
+        cursor.execute("UPDATE sites SET is_active = ? WHERE id = ?", (new_status, site_id))
+        conn.commit()
         conn.close()
         
+        status_text = "activated" if new_status else "deactivated"
+        return jsonify({'success': True, 'message': f'Site {status_text} successfully!', 'new_status': new_status}), 200
+        
     except Exception as e:
-        flash(f'Error updating site status: {str(e)}', 'error')
-    
-    return redirect(url_for('admin_sites'))
+        return jsonify({'success': False, 'message': f'Error updating site status: {str(e)}'}), 500
 
-@app.route('/admin/visit-requests')
+@app.route('/api/admin/visit-requests', methods=['GET'])
 @admin_required
-def admin_visit_requests():
-    """Admin visit requests management page"""
+def get_visit_requests():
+    """Get visit requests"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1091,49 +1205,67 @@ def admin_visit_requests():
         """)
         visit_requests = cursor.fetchall()
         conn.close()
-        return render_template('admin_visit_requests.html', visit_requests=visit_requests)
+        
+        requests_list = [dict(r) if isinstance(r, dict) else {
+            'id': r[0],
+            'user_id': r[1],
+            'site_id': r[2],
+            'visit_date': r[3],
+            'status': r[4],
+            'reason': r[5],
+            'admin_notes': r[6],
+            'approved_by': r[7],
+            'approved_date': r[8],
+            'requested_at': r[9],
+            'site_name': r[10],
+            'site_address': r[11],
+            'employee_name': r[12]
+        } for r in visit_requests]
+        
+        return jsonify({'success': True, 'data': requests_list}), 200
+        
     except Exception as e:
-        flash(f'Error loading visit requests: {str(e)}', 'error')
-        return redirect(url_for('admin_dashboard'))
+        return jsonify({'success': False, 'message': f'Error loading visit requests: {str(e)}'}), 500
 
-@app.route('/admin/visit-requests/update/<int:request_id>', methods=['POST'])
+@app.route('/api/admin/visit-requests/<int:request_id>', methods=['POST'])
 @admin_required
 def update_visit_request(request_id):
     """Approve or reject visit request"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
         
-        action = request.form.get('action')
-        admin_notes = request.form.get('admin_notes', '').strip()
+        action = data.get('action')
+        admin_notes = data.get('admin_notes', '').strip()
         
         if action not in ['approve', 'reject']:
-            conn.close()
-            flash('Invalid action', 'error')
-            return redirect(url_for('admin_visit_requests'))
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
         
         new_status = 'Approved' if action == 'approve' else 'Rejected'
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
         cursor.execute("""
             UPDATE site_visits 
             SET status = ?, admin_notes = ?, approved_by = ?, approved_date = datetime('now')
             WHERE id = ?
-        """,  (new_status, admin_notes, session['user_id'], request_id))
+        """, (new_status, admin_notes, session['user_id'], request_id))
         
         conn.commit()
         conn.close()
         
-        flash(f'✅ Visit request {new_status.lower()} successfully!', 'success')
+        return jsonify({'success': True, 'message': f'Visit request {new_status.lower()} successfully!'}), 200
         
     except Exception as e:
-        flash(f'Error updating visit request: {str(e)}', 'error')
-    
-    return redirect(url_for('admin_visit_requests'))
+        return jsonify({'success': False, 'message': f'Error updating visit request: {str(e)}'}), 500
 
-@app.route('/admin/remote-requests')
+@app.route('/api/admin/remote-requests', methods=['GET'])
 @admin_required
-def admin_remote_requests():
-    """Admin remote work requests management page"""
+def get_remote_requests():
+    """Get remote work requests"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1145,51 +1277,67 @@ def admin_remote_requests():
         """)
         remote_requests = cursor.fetchall()
         conn.close()
-        return render_template('admin_remote_requests.html', remote_requests=remote_requests)
+        
+        requests_list = [dict(r) if isinstance(r, dict) else {
+            'id': r[0],
+            'user_id': r[1],
+            'start_date': r[2],
+            'end_date': r[3],
+            'reason': r[4],
+            'status': r[5],
+            'review_notes': r[6],
+            'reviewed_by': r[7],
+            'reviewed_at': r[8],
+            'requested_at': r[9],
+            'employee_name': r[10]
+        } for r in remote_requests]
+        
+        return jsonify({'success': True, 'data': requests_list}), 200
+        
     except Exception as e:
-        flash(f'Error loading remote requests: {str(e)}', 'error')
-        return redirect(url_for('admin_dashboard'))
+        return jsonify({'success': False, 'message': f'Error loading remote requests: {str(e)}'}), 500
 
-@app.route('/admin/remote-requests/update/<int:request_id>', methods=['POST'])
+@app.route('/api/admin/remote-requests/<int:request_id>', methods=['POST'])
 @admin_required
 def update_remote_request(request_id):
     """Approve or reject remote work request"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
         
-        action = request.form.get('action')
-        review_notes = request.form.get('review_notes', '').strip()
+        action = data.get('action')
+        review_notes = data.get('review_notes', '').strip()
         
         if action not in ['approve', 'reject']:
-            conn.close()
-            flash('Invalid action', 'error')
-            return redirect(url_for('admin_remote_requests'))
+            return jsonify({'success': False, 'message': 'Invalid action'}), 400
         
         new_status = 'Approved' if action == 'approve' else 'Rejected'
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
         cursor.execute("""
             UPDATE remote_work_requests 
             SET status = ?, review_notes = ?, reviewed_by = ?, reviewed_at = datetime('now')
             WHERE id = ?
-        """,  (new_status, review_notes, session['user_id'], request_id))
+        """, (new_status, review_notes, session['user_id'], request_id))
         
         conn.commit()
         conn.close()
         
-        flash(f'✅ Remote request {new_status.lower()} successfully!', 'success')
+        return jsonify({'success': True, 'message': f'Remote request {new_status.lower()} successfully!'}), 200
         
     except Exception as e:
-        flash(f'Error updating remote request: {str(e)}', 'error')
-    
-    return redirect(url_for('admin_remote_requests'))
+        return jsonify({'success': False, 'message': f'Error updating remote request: {str(e)}'}), 500
 
 # ====================== EMPLOYEE GEOFENCING ROUTES ======================
 
-@app.route('/request-visit')
+@app.route('/api/employee/visit-requests', methods=['GET'])
 @login_required
-def request_visit():
-    """Employee visit request page"""
+def get_employee_visit_requests():
+    """Get employee's visit requests"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1206,126 +1354,170 @@ def request_visit():
             WHERE sv.user_id = ? 
             AND sv.visit_date >= date('now')
             ORDER BY sv.visit_date DESC
-        """,  (session['user_id'],))
+        """, (session['user_id'],))
         my_requests = cursor.fetchall()
         
         conn.close()
-        return render_template('request_visit.html', sites=sites, my_requests=my_requests)
+        
+        sites_list = [dict(s) if isinstance(s, dict) else {
+            'id': s[0],
+            'site_name': s[1],
+            'site_address': s[2],
+            'site_lat': s[3],
+            'site_lon': s[4],
+            'site_radius': s[5],
+            'site_description': s[6],
+            'is_active': s[7]
+        } for s in sites]
+        
+        requests_list = [dict(r) if isinstance(r, dict) else {
+            'id': r[0],
+            'user_id': r[1],
+            'site_id': r[2],
+            'visit_date': r[3],
+            'status': r[4],
+            'reason': r[5],
+            'admin_notes': r[6],
+            'approved_by': r[7],
+            'approved_date': r[8],
+            'requested_at': r[9],
+            'site_name': r[10],
+            'site_address': r[11]
+        } for r in my_requests]
+        
+        return jsonify({'success': True, 'data': {'sites': sites_list, 'my_requests': requests_list}}), 200
+        
     except Exception as e:
-        flash(f'Error loading visit request page: {str(e)}', 'error')
-        return redirect(url_for('dashboard'))
+        return jsonify({'success': False, 'message': f'Error loading visit requests: {str(e)}'}), 500
 
-@app.route('/request-visit/submit', methods=['POST'])
+@app.route('/api/employee/visit-requests', methods=['POST'])
 @login_required
 def submit_visit_request():
     """Submit new visit request"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
         
-        site_id = request.form.get('site_id')
-        visit_date = request.form.get('visit_date')
-        purpose = request.form.get('purpose', '').strip()
+        site_id = data.get('site_id')
+        visit_date = data.get('visit_date')
+        purpose = data.get('purpose', '').strip()
         
         if not site_id or not visit_date or not purpose:
-            conn.close()
-            flash('All fields are required', 'error')
-            return redirect(url_for('request_visit'))
+            return jsonify({'success': False, 'message': 'All fields are required'}), 400
         
         # Validate date is not in the past
-        from datetime import datetime
-        visit_date_obj = datetime.strptime(visit_date, '%Y-%m-%d').date()
+        try:
+            visit_date_obj = datetime.strptime(visit_date, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'success': False, 'message': 'Invalid date format. Use YYYY-MM-DD'}), 400
+        
         if visit_date_obj < date.today():
-            conn.close()
-            flash('Visit date cannot be in the past', 'error')
-            return redirect(url_for('request_visit'))
+            return jsonify({'success': False, 'message': 'Visit date cannot be in the past'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
         # Check for existing request for same date
         cursor.execute("""
             SELECT id FROM site_visits 
             WHERE user_id = ? AND visit_date = ?
-        """,  (session['user_id'], visit_date))
+        """, (session['user_id'], visit_date))
         
         if cursor.fetchone():
             conn.close()
-            flash('You already have a visit request for this date', 'error')
-            return redirect(url_for('request_visit'))
+            return jsonify({'success': False, 'message': 'You already have a visit request for this date'}), 400
         
         # Insert new request
         cursor.execute("""
             INSERT INTO site_visits (user_id, site_id, visit_date, purpose, status, requested_at)
             VALUES (?, ?, ?, ?, 'Pending', datetime('now'))
-        """,  (session['user_id'], site_id, visit_date, purpose))
+        """, (session['user_id'], site_id, visit_date, purpose))
         
         conn.commit()
         conn.close()
         
-        flash('✅ Visit request submitted successfully! Awaiting admin approval.', 'success')
+        return jsonify({'success': True, 'message': 'Visit request submitted successfully! Awaiting admin approval.'}), 201
         
     except Exception as e:
-        flash(f'Error submitting visit request: {str(e)}', 'error')
-    
-    return redirect(url_for('request_visit'))
+        return jsonify({'success': False, 'message': f'Error submitting visit request: {str(e)}'}), 500
 
-@app.route('/request-remote')
+@app.route('/api/employee/remote-requests', methods=['GET'])
 @login_required
-def request_remote():
-    """Employee remote work request page"""
+def get_employee_remote_requests():
+    """Get employee's remote work requests"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get user's pending/approved requests
         cursor.execute("""
             SELECT * FROM remote_work_requests 
             WHERE user_id = ? 
             AND end_date >= date('now')
             ORDER BY start_date DESC
-        """,  (session['user_id'],))
+        """, (session['user_id'],))
         requests_list = cursor.fetchall()
         
         conn.close()
-        return render_template('request_remote.html', requests=requests_list, today_date=date.today())
+        
+        requests_data = [dict(r) if isinstance(r, dict) else {
+            'id': r[0],
+            'user_id': r[1],
+            'start_date': r[2],
+            'end_date': r[3],
+            'address': r[4],
+            'lat': r[5],
+            'lon': r[6],
+            'reason': r[7],
+            'status': r[8],
+            'review_notes': r[9],
+            'reviewed_by': r[10],
+            'reviewed_at': r[11],
+            'requested_at': r[12]
+        } for r in requests_list]
+        
+        return jsonify({'success': True, 'data': requests_data}), 200
+        
     except Exception as e:
-        print(f"[ERROR] request_remote failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return f"<h1>Error Loading Page</h1><p>{str(e)}</p><pre>{traceback.format_exc()}</pre>"
+        print(f"[ERROR] get_employee_remote_requests failed: {e}")
+        return jsonify({'success': False, 'message': f'Error loading remote requests: {str(e)}'}), 500
 
-@app.route('/request-remote/submit', methods=['POST'])
+@app.route('/api/employee/remote-requests', methods=['POST'])
 @login_required
 def submit_remote_request():
     """Submit new remote work request"""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
         
-        start_date = request.form.get('start_date')
-        end_date = request.form.get('end_date')
-        address = request.form.get('address', '').strip()
-        lat = request.form.get('lat')
-        lon = request.form.get('lon')
-        reason = request.form.get('reason', '').strip()
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        address = data.get('address', '').strip()
+        lat = data.get('lat')
+        lon = data.get('lon')
+        reason = data.get('reason', '').strip()
         
         if not start_date or not end_date or not address or not lat or not lon or not reason:
-            conn.close()
-            flash('All fields are required', 'error')
-            return redirect(url_for('request_remote'))
+            return jsonify({'success': False, 'message': 'All fields are required'}), 400
         
-        # Validate date is not in the past
-        from datetime import datetime
-        start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
-        end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+        # Validate date format
+        try:
+            start_date_obj = datetime.strptime(start_date, '%Y-%m-%d').date()
+            end_date_obj = datetime.strptime(end_date, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'success': False, 'message': 'Invalid date format. Use YYYY-MM-DD'}), 400
         
         if start_date_obj < date.today():
-            conn.close()
-            flash('Start date cannot be in the past', 'error')
-            return redirect(url_for('request_remote'))
+            return jsonify({'success': False, 'message': 'Start date cannot be in the past'}), 400
             
         if end_date_obj < start_date_obj:
-            conn.close()
-            flash('End date cannot be before start date', 'error')
-            return redirect(url_for('request_remote'))
+            return jsonify({'success': False, 'message': 'End date cannot be before start date'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
         # Check for overlapping requests
         cursor.execute("""
@@ -1334,23 +1526,26 @@ def submit_remote_request():
             AND (
                 (start_date <= ? AND end_date >= ?)
             )
-        """,  (session['user_id'], end_date, start_date))
+        """, (session['user_id'], end_date, start_date))
         
         if cursor.fetchone():
             conn.close()
-            flash('You already have a remote work request overlapping with this period', 'error')
-            return redirect(url_for('request_remote'))
+            return jsonify({'success': False, 'message': 'You already have a remote work request overlapping with this period'}), 400
         
         # Insert new request
         cursor.execute("""
             INSERT INTO remote_work_requests (user_id, start_date, end_date, address, lat, lon, reason, status, requested_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', datetime('now'))
-        """,  (session['user_id'], start_date, end_date, address, lat, lon, reason))
+        """, (session['user_id'], start_date, end_date, address, lat, lon, reason))
         
         conn.commit()
         conn.close()
         
-        flash('✅ Remote work request submitted successfully! Awaiting admin approval.', 'success')
+        return jsonify({'success': True, 'message': 'Remote work request submitted successfully! Awaiting admin approval.'}), 201
+        
+    except Exception as e:
+        print(f"[ERROR] submit_remote_request failed: {e}")
+        return jsonify({'success': False, 'message': f'Error submitting remote request: {str(e)}'}), 500
         
     except Exception as e:
         flash(f'Error submitting remote request: {str(e)}', 'error')
@@ -1374,15 +1569,24 @@ def dashboard():
         geofence_status = row['geofence_status'] if row else 'none'
         compoff_balance = row.get('compoff_balance',0) if row else 0
         conn.close()
-        return render_template('dashboard.html',
-                               username=session['username'],
-                               employee_name=session['employee_name'],
-                               today_attendance=today_attendance,
-                               geofence_status=geofence_status,
-                               compoff_balance=compoff_balance)
+        
+        # Return JSON for API clients
+        return jsonify({
+            'success': True,
+            'data': {
+                'username': session.get('username'),
+                'employee_name': session.get('employee_name'),
+                'today_attendance': today_attendance,
+                'geofence_status': geofence_status,
+                'compoff_balance': compoff_balance
+            }
+        })
     except Exception as e:
         print(f"Dashboard error: {e}")
-        flash(f'Dashboard error: {str(e)}', 'error')
+        return jsonify({
+            'success': False,
+            'message': f'Dashboard error: {str(e)}'
+        }), 500
         return redirect(url_for('home'))
 
 @app.route('/mark')
@@ -1926,12 +2130,14 @@ def myleave_export():
         return redirect(url_for('myleave'))
 
 # ====================== ADMIN LEAVE ROUTES ======================
-@app.route('/admin/leave_management')
+@app.route('/api/admin/leave-requests', methods=['GET'])
 @admin_required
-def admin_leave_management():
-    """Admin view for pending leave requests."""
+def get_leave_requests():
+    """Get pending leave requests"""
     try:
-        conn = get_db_connection(); cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
         cursor.execute("""
             SELECT lr.leave_id, lr.user_id, u.employee_name, u.username, lr.leave_type,
                    lr.start_date, lr.end_date, lr.reason, lr.status, lr.created_at as request_date
@@ -1941,118 +2147,201 @@ def admin_leave_management():
             ORDER BY lr.created_at ASC
         """)
         pending = cursor.fetchall()
-        # Simple stats (could be expanded)
+        
         cursor.execute("SELECT COUNT(*) AS total_pending FROM leave_requests WHERE status='Pending'")
         stats = cursor.fetchone()
         conn.close()
-        return render_template('leave_management.html',
-                               username=session['username'],
-                               pending_requests=pending,
-                               stats=stats)
+        
+        pending_list = [dict(req) if isinstance(req, dict) else {
+            'leave_id': req[0],
+            'user_id': req[1],
+            'employee_name': req[2],
+            'username': req[3],
+            'leave_type': req[4],
+            'start_date': req[5],
+            'end_date': req[6],
+            'reason': req[7],
+            'status': req[8],
+            'request_date': req[9]
+        } for req in pending]
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'pending_requests': pending_list,
+                'stats': {'total_pending': stats[0] if isinstance(stats, tuple) else stats.get('total_pending', 0)}
+            }
+        }), 200
+        
     except Exception as e:
-        print(f"Admin leave management error: {e}")
-        import traceback
-        traceback.print_exc()
-        flash(f'Leave management error: {str(e)}','error')
-        return redirect(url_for('admin_dashboard'))
+        print(f"Get leave requests error: {e}")
+        return jsonify({'success': False, 'message': f'Error loading leave requests: {str(e)}'}), 500
 
-@app.route('/admin/review_leave/<int:leave_id>', methods=['POST'])
+@app.route('/api/admin/leave-requests/<int:leave_id>', methods=['POST'])
 @admin_required
-def admin_review_leave(leave_id):
-    """Approve or reject a leave request and update balances if approved."""
-    decision = request.form.get('decision')  # 'Approve' or 'Reject'
-    if decision not in ('Approve','Reject'):
-        flash('Invalid decision.','error'); return redirect(url_for('admin_leave_management'))
-    admin_id = session.get('user_id')
+def review_leave_request(leave_id):
+    """Approve or reject a leave request"""
     try:
-        conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute("SELECT * FROM leave_requests WHERE leave_id = ?",  (leave_id,))
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
+        
+        decision = data.get('decision')  # 'Approve' or 'Reject'
+        if decision not in ('Approve', 'Reject'):
+            return jsonify({'success': False, 'message': 'Invalid decision.'}), 400
+        
+        admin_id = session.get('user_id')
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM leave_requests WHERE leave_id = ?", (leave_id,))
         req = cursor.fetchone()
+        
         if not req:
-            conn.close(); flash('Leave request not found.','error'); return redirect(url_for('admin_leave_management'))
-        if req['status'] != 'Pending':
-            conn.close(); flash('Request already processed.','info'); return redirect(url_for('admin_leave_management'))
+            conn.close()
+            return jsonify({'success': False, 'message': 'Leave request not found.'}), 404
+        
+        req_status = req['status'] if isinstance(req, dict) else req[8]
+        if req_status != 'Pending':
+            conn.close()
+            return jsonify({'success': False, 'message': 'Request already processed.'}), 400
+        
         # Calculate days
-        days = (req['end_date'] - req['start_date']).days + 1
+        start_date = req['start_date'] if isinstance(req, dict) else req[5]
+        end_date = req['end_date'] if isinstance(req, dict) else req[6]
+        leave_type = req['leave_type'] if isinstance(req, dict) else req[4]
+        user_id = req['user_id'] if isinstance(req, dict) else req[1]
+        
+        from datetime import datetime
+        if isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+        if isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+        
+        days = (end_date - start_date).days + 1
+        
         cursor2 = conn.cursor()
         if decision == 'Approve':
-            # Update leave_requests row
             cursor2.execute("""
                 UPDATE leave_requests SET status='Approved', reviewed_by=?, review_date=datetime('now')
                 WHERE leave_id=?
             """, (admin_id, leave_id))
+            
             # Update user balances (increment taken)
-            if req['leave_type'] in ('Vacation','Personal Day'):
+            if leave_type in ('Vacation', 'Personal Day'):
                 cursor2.execute("""
-                    UPDATE users SET vacation_days_taken = vacation_days_taken + %s
-                    WHERE user_id=%s
-                """, (days, req['user_id']))
-            elif req['leave_type'] == 'Sick Leave':
+                    UPDATE users SET vacation_days_taken = vacation_days_taken + ?
+                    WHERE user_id=?
+                """, (days, user_id))
+            elif leave_type == 'Sick Leave':
                 cursor2.execute("""
-                    UPDATE users SET sick_days_taken = sick_days_taken + %s
-                    WHERE user_id=%s
-                """, (days, req['user_id']))
-            flash(f'Leave request #{leave_id} approved for {days} day(s).','success')
+                    UPDATE users SET sick_days_taken = sick_days_taken + ?
+                    WHERE user_id=?
+                """, (days, user_id))
+            
+            message = f'Leave request #{leave_id} approved for {days} day(s).'
         else:
             cursor2.execute("""
                 UPDATE leave_requests SET status='Rejected', reviewed_by=?, review_date=datetime('now')
                 WHERE leave_id=?
             """, (admin_id, leave_id))
-            flash(f'Leave request #{leave_id} rejected.','info')
-        conn.commit(); conn.close()
-        return redirect(url_for('admin_leave_management'))
+            message = f'Leave request #{leave_id} rejected.'
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': message}), 200
+        
     except Exception as e:
-        print(f"Admin review leave error: {e}")
-        flash('Error processing leave request.','error')
-        return redirect(url_for('admin_leave_management'))
+        print(f"Review leave request error: {e}")
+        return jsonify({'success': False, 'message': f'Error processing leave request: {str(e)}'}), 500
 
-@app.route('/admin/holidays')
+@app.route('/api/admin/holidays', methods=['GET'])
 @admin_required
-def admin_holidays():
-    """List and manage company holidays (current year)."""
+def get_holidays():
+    """Get holidays for the year"""
     try:
         year = int(request.args.get('year', date.today().year))
         start = date(year, 1, 1)
         end = date(year, 12, 31)
-        conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute("SELECT * FROM holidays WHERE holiday_date BETWEEN ? AND ? ORDER BY holiday_date",  (start, end))
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM holidays 
+            WHERE holiday_date BETWEEN ? AND ? 
+            ORDER BY holiday_date
+        """, (start, end))
         holidays = cursor.fetchall()
         conn.close()
-        return render_template('holidays.html', username=session['username'], holidays=holidays, year=year)
+        
+        holidays_list = [dict(h) if isinstance(h, dict) else {
+            'holiday_id': h[0],
+            'holiday_date': h[1],
+            'holiday_name': h[2]
+        } for h in holidays]
+        
+        return jsonify({'success': True, 'data': {'holidays': holidays_list, 'year': year}}), 200
+        
     except Exception as e:
-        print(f"Holiday list error: {e}")
-        flash('Failed to load holidays','error')
-        return redirect(url_for('admin_dashboard'))
+        print(f"Get holidays error: {e}")
+        return jsonify({'success': False, 'message': f'Error loading holidays: {str(e)}'}), 500
 
-@app.route('/admin/add_holiday', methods=['POST'])
+@app.route('/api/admin/holidays', methods=['POST'])
 @admin_required
-def add_holiday():
-    date_str = request.form.get('holiday_date')
-    name = (request.form.get('holiday_name') or '').strip()
-    if not date_str or not name:
-        flash('Holiday date and name required','error'); return redirect(url_for('admin_holidays'))
+def create_holiday():
+    """Add new holiday"""
     try:
-        hdate = datetime.strptime(date_str, '%Y-%m-%d').date()
-    except ValueError:
-        flash('Invalid holiday date','error'); return redirect(url_for('admin_holidays'))
-    try:
-        conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO holidays (holiday_date, holiday_name) VALUES (?,?)",  (hdate, name))
-        conn.commit(); conn.close(); flash('Holiday saved','success')
+        if request.is_json:
+            data = request.get_json()
+        else:
+            data = request.form.to_dict()
+        
+        date_str = data.get('holiday_date', '')
+        name = data.get('holiday_name', '').strip()
+        
+        if not date_str or not name:
+            return jsonify({'success': False, 'message': 'Holiday date and name required'}), 400
+        
+        try:
+            hdate = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'success': False, 'message': 'Invalid holiday date format. Use YYYY-MM-DD'}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO holidays (holiday_date, holiday_name) 
+            VALUES (?, ?)
+        """, (hdate, name))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': 'Holiday saved'}), 201
+        
     except Exception as e:
-        print(f"Add holiday error: {e}"); flash('Failed to save holiday','error')
-    return redirect(url_for('admin_holidays'))
+        print(f"Create holiday error: {e}")
+        return jsonify({'success': False, 'message': f'Error saving holiday: {str(e)}'}), 500
 
-@app.route('/admin/delete_holiday/<int:holiday_id>', methods=['POST'])
+@app.route('/api/admin/holidays/<int:holiday_id>', methods=['DELETE'])
 @admin_required
 def delete_holiday(holiday_id):
+    """Delete a holiday"""
     try:
-        conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute("DELETE FROM holidays WHERE holiday_id = ?",  (holiday_id,))
-        conn.commit(); conn.close(); flash('Holiday deleted','success')
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("DELETE FROM holidays WHERE holiday_id = ?", (holiday_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': 'Holiday deleted'}), 200
+        
     except Exception as e:
-        print(f"Delete holiday error: {e}"); flash('Failed to delete holiday','error')
-    return redirect(url_for('admin_holidays'))
+        print(f"Delete holiday error: {e}")
+        return jsonify({'success': False, 'message': f'Error deleting holiday: {str(e)}'}), 500
 
 @app.route('/admin/employee_attendance_data/<user_id>')
 @admin_required

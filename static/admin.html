@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard - CGS Attendance</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .dashboard-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    .user-info {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    
+    .buttons {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    
+    .btn {
+      padding: 10px 20px;
+      background: #28a745;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    
+    .btn:hover {
+      background: #218838;
+    }
+    
+    .btn-logout {
+      background: #dc3545;
+    }
+    
+    .btn-logout:hover {
+      background: #c82333;
+    }
+    
+    .section {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    
+    .section h3 {
+      margin-top: 0;
+    }
+    
+    .alert {
+      padding: 15px;
+      margin-bottom: 15px;
+      border-radius: 4px;
+    }
+    
+    .alert-error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    
+    .alert-success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    
+    .alert-info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: #666;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+    }
+    
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+    }
+    
+    th {
+      background: #f5f5f5;
+      font-weight: bold;
+    }
+    
+    tr:hover {
+      background: #f9f9f9;
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard-container">
+    <h1>Admin Dashboard</h1>
+    
+    <!-- User Info -->
+    <div class="user-info">
+      <p><strong>Welcome Admin!</strong></p>
+      <p id="userNameDisplay"></p>
+      <p id="userIdDisplay"></p>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="buttons">
+      <button class="btn" onclick="loadDashboard()">Refresh</button>
+      <button class="btn" onclick="testEmployeesAPI()">Test Employees API</button>
+      <button class="btn" onclick="testSettingsAPI()">Test Settings API</button>
+      <button class="btn btn-logout" onclick="handleLogout()">Logout</button>
+    </div>
+
+    <!-- Alerts -->
+    <div id="alertContainer"></div>
+
+    <!-- Dashboard Content -->
+    <div id="dashboardContent">
+      <div class="loading">Loading admin dashboard...</div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/js/api.js"></script>
+  <script src="/js/auth.js"></script>
+  <script>
+    console.log("[AdminDashboard] Page loaded");
+
+    // Require admin authentication
+    requireAuth();
+    requireAdmin();
+
+    // Get current user
+    const user = getCurrentUser();
+    console.log("[AdminDashboard] Current admin user:", user);
+
+    // Display user info
+    document.getElementById("userNameDisplay").textContent = `Admin: ${user.username}`;
+    document.getElementById("userIdDisplay").textContent = `ID: ${user.userId}`;
+
+    // Handle logout
+    function handleLogout() {
+      if (confirm("Are you sure you want to logout?")) {
+        logout();
+      }
+    }
+
+    // Load admin dashboard
+    async function loadDashboard() {
+      const container = document.getElementById("dashboardContent");
+      
+      try {
+        container.innerHTML = '<div class="loading">Loading admin dashboard...</div>';
+        
+        // Check auth status
+        const authResult = await checkAuth();
+        
+        if (!authResult) {
+          showAlert("Your session has expired. Please login again.", "error");
+          setTimeout(() => {
+            window.location.href = "/login.html";
+          }, 2000);
+          return;
+        }
+
+        // Build dashboard content
+        let html = '<div class="section">';
+        html += '<h3>Admin Dashboard</h3>';
+        html += '<p>Logged in as: <strong>' + user.username + '</strong></p>';
+        html += '<p>Role: <strong>Admin</strong></p>';
+        html += '</div>';
+        
+        // Quick links
+        html += '<div class="section">';
+        html += '<h3>Quick Links</h3>';
+        html += '<div class="buttons">';
+        html += '<button class="btn" onclick="loadEmployees()">View Employees</button>';
+        html += '<button class="btn" onclick="loadAttendance()">View Attendance</button>';
+        html += '<button class="btn" onclick="loadSettings()">Settings</button>';
+        html += '</div>';
+        html += '</div>';
+        
+        container.innerHTML = html;
+        
+      } catch (error) {
+        console.error("[AdminDashboard] Error loading:", error);
+        showAlert("Error loading dashboard: " + error.message, "error");
+      }
+    }
+
+    // Load employees
+    async function loadEmployees() {
+      console.log("[AdminDashboard] Loading employees...");
+      const result = await getEmployees();
+      
+      if (result.success && result.data) {
+        const employees = result.data.data || [];
+        console.log("[AdminDashboard] Got " + employees.length + " employees");
+        
+        let html = '<div class="section"><h3>Employees (' + employees.length + ')</h3>';
+        html += '<table>';
+        html += '<tr><th>ID</th><th>Name</th><th>Username</th><th>Role</th></tr>';
+        
+        employees.forEach(emp => {
+          html += '<tr>';
+          html += '<td>' + emp.user_id + '</td>';
+          html += '<td>' + emp.employee_name + '</td>';
+          html += '<td>' + emp.username + '</td>';
+          html += '<td>' + emp.role + '</td>';
+          html += '</tr>';
+        });
+        
+        html += '</table></div>';
+        document.getElementById("dashboardContent").innerHTML = html;
+        
+        showAlert("Loaded " + employees.length + " employees", "success");
+      } else {
+        showAlert("Failed to load employees: " + (result.error || "Unknown error"), "error");
+      }
+    }
+
+    // Load attendance
+    async function loadAttendance() {
+      console.log("[AdminDashboard] Loading attendance...");
+      const result = await getAttendance();
+      
+      if (result.success && result.data) {
+        console.log("[AdminDashboard] Got attendance data");
+        showAlert("Attendance data loaded. Check console.", "success");
+        console.log(result.data);
+      } else {
+        showAlert("Failed to load attendance: " + (result.error || "Unknown error"), "error");
+      }
+    }
+
+    // Load settings
+    async function loadSettings() {
+      console.log("[AdminDashboard] Loading settings...");
+      const result = await getSettings();
+      
+      if (result.success && result.data) {
+        const settings = result.data.data || [];
+        console.log("[AdminDashboard] Got " + settings.length + " settings");
+        showAlert("Settings loaded. Check console.", "success");
+        console.log(settings);
+      } else {
+        showAlert("Failed to load settings: " + (result.error || "Unknown error"), "error");
+      }
+    }
+
+    // Test APIs
+    async function testEmployeesAPI() {
+      console.log("[Test] Testing employees API");
+      showAlert("Testing employees API...", "info");
+      const result = await getEmployees();
+      if (result.success) {
+        showAlert("Employees API OK! " + (result.data?.data?.length || 0) + " employees", "success");
+      } else {
+        showAlert("Employees API failed: " + result.error, "error");
+      }
+    }
+
+    async function testSettingsAPI() {
+      console.log("[Test] Testing settings API");
+      showAlert("Testing settings API...", "info");
+      const result = await getSettings();
+      if (result.success) {
+        showAlert("Settings API OK!", "success");
+      } else {
+        showAlert("Settings API failed: " + result.error, "error");
+      }
+    }
+
+    // Display alert
+    function showAlert(message, type = "error") {
+      const container = document.getElementById("alertContainer");
+      const alertDiv = document.createElement("div");
+      alertDiv.className = `alert alert-${type}`;
+      alertDiv.textContent = message;
+      
+      container.appendChild(alertDiv);
+      
+      setTimeout(() => {
+        alertDiv.remove();
+      }, 5000);
+    }
+
+    // Initial load
+    loadDashboard();
+  </script>
+</body>
+</html>

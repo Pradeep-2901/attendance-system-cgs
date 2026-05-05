@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: #f5f7fa;
+        }
+
+        .navbar-custom {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .navbar-custom .navbar-brand {
+            font-weight: 700;
+            font-size: 22px;
+        }
+
+        .navbar-custom .nav-link {
+            color: rgba(255, 255, 255, 0.85) !important;
+            font-weight: 500;
+        }
+
+        .navbar-custom .nav-link:hover {
+            color: white !important;
+        }
+
+        .sidebar {
+            background: white;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            padding: 0;
+            height: fit-content;
+        }
+
+        .sidebar .nav-link {
+            color: #333;
+            padding: 12px 20px;
+            border-left: 4px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .sidebar .nav-link:hover,
+        .sidebar .nav-link.active {
+            background: #f8f9fa;
+            border-left-color: #667eea;
+            color: #667eea;
+        }
+
+        .sidebar .nav-link i {
+            width: 20px;
+            margin-right: 10px;
+        }
+
+        .metric-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+            text-align: center;
+            transition: all 0.3s ease;
+            border-top: 4px solid #667eea;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .metric-card.danger {
+            border-top-color: #dc3545;
+        }
+
+        .metric-card.success {
+            border-top-color: #28a745;
+        }
+
+        .metric-card.warning {
+            border-top-color: #ffc107;
+        }
+
+        .metric-card h3 {
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .metric-card .value {
+            font-size: 36px;
+            font-weight: 700;
+            color: #667eea;
+        }
+
+        .metric-card.danger .value {
+            color: #dc3545;
+        }
+
+        .table-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+        }
+
+        .table-container h4 {
+            padding: 20px;
+            margin: 0;
+            border-bottom: 1px solid #e9ecef;
+            background: #f8f9fa;
+        }
+
+        .table {
+            margin: 0;
+        }
+
+        .table thead th {
+            background: #f8f9fa;
+            border-bottom: 2px solid #dee2e6;
+            color: #333;
+            font-weight: 600;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 6px;
+        }
+
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-badge.approved {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-badge.rejected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .loading-skeleton {
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+            height: 40px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+        }
+
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .main-content {
+            padding: 30px 20px;
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                margin-bottom: 30px;
+            }
+
+            .metric-card .value {
+                font-size: 28px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark navbar-custom sticky-top">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-users-cog"></i> Admin Panel
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <span class="nav-link text-white">
+                            <i class="fas fa-user-circle"></i> <span class="user-name">Admin</span>
+                        </span>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link" onclick="handleLogout()" style="border: none; background: none; color: rgba(255,255,255,0.85);">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid main-content">
+        <div id="messageContainer"></div>
+
+        <div class="row">
+            <!-- Sidebar Navigation -->
+            <div class="col-lg-3 mb-30">
+                <div class="sidebar">
+                    <nav class="nav flex-column">
+                        <a class="nav-link active" href="#" onclick="showSection('dashboard')">
+                            <i class="fas fa-chart-bar"></i> Dashboard
+                        </a>
+                        <a class="nav-link" href="#" onclick="showSection('employees')">
+                            <i class="fas fa-users"></i> Employees
+                        </a>
+                        <a class="nav-link" href="#" onclick="showSection('attendance')">
+                            <i class="fas fa-calendar-check"></i> Attendance
+                        </a>
+                        <a class="nav-link" href="#" onclick="showSection('leave')">
+                            <i class="fas fa-file-alt"></i> Leave Requests
+                        </a>
+                        <a class="nav-link" href="#" onclick="showSection('compoff')">
+                            <i class="fas fa-business-time"></i> Comp-Off
+                        </a>
+                        <a class="nav-link" href="#" onclick="showSection('holidays')">
+                            <i class="fas fa-calendar-plus"></i> Holidays
+                        </a>
+                    </nav>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="col-lg-9">
+                <!-- Dashboard Section -->
+                <div id="dashboardSection">
+                    <h2 class="mb-4">Dashboard</h2>
+
+                    <!-- Metrics -->
+                    <div class="row mb-4">
+                        <div class="col-md-3 mb-3">
+                            <div class="metric-card">
+                                <h3>Total Employees</h3>
+                                <div class="value" id="totalEmployees">—</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <div class="metric-card success">
+                                <h3>Today's Attendance</h3>
+                                <div class="value" id="todayAttendance">—</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <div class="metric-card warning">
+                                <h3>Pending Requests</h3>
+                                <div class="value" id="pendingRequests">—</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <div class="metric-card danger">
+                                <h3>Pending Comp-Off</h3>
+                                <div class="value" id="pendingCompOff">—</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Attendance -->
+                    <div class="table-container">
+                        <h4>Recent Attendance</h4>
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Employee</th>
+                                    <th>Date</th>
+                                    <th>Check In</th>
+                                    <th>Check Out</th>
+                                    <th>Duration</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recentAttendanceTable">
+                                <tr><td colspan="6" class="text-center py-4">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Employees Section -->
+                <div id="employeesSection" style="display: none;">
+                    <h2 class="mb-4">Manage Employees</h2>
+                    <button class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#employeeModal">
+                        <i class="fas fa-plus"></i> Add Employee
+                    </button>
+                    <div class="table-container">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Username</th>
+                                    <th>Email</th>
+                                    <th>Department</th>
+                                    <th>Role</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="employeesTable">
+                                <tr><td colspan="6" class="text-center py-4">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Attendance Section -->
+                <div id="attendanceSection" style="display: none;">
+                    <h2 class="mb-4">Attendance Management</h2>
+                    <div class="table-container">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Employee</th>
+                                    <th>Date</th>
+                                    <th>Check In</th>
+                                    <th>Check Out</th>
+                                    <th>Duration</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="attendanceTable">
+                                <tr><td colspan="6" class="text-center py-4">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Leave Section -->
+                <div id="leaveSection" style="display: none;">
+                    <h2 class="mb-4">Leave Requests</h2>
+                    <div class="table-container">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Employee</th>
+                                    <th>Type</th>
+                                    <th>From</th>
+                                    <th>To</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="leaveTable">
+                                <tr><td colspan="6" class="text-center py-4">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Comp-Off Section -->
+                <div id="compoffSection" style="display: none;">
+                    <h2 class="mb-4">Comp-Off Requests</h2>
+                    <div class="table-container">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Employee</th>
+                                    <th>Date</th>
+                                    <th>Reason</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="compoffTable">
+                                <tr><td colspan="5" class="text-center py-4">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Holidays Section -->
+                <div id="holidaysSection" style="display: none;">
+                    <h2 class="mb-4">Manage Holidays</h2>
+                    <button class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#holidayModal">
+                        <i class="fas fa-plus"></i> Add Holiday
+                    </button>
+                    <div class="table-container">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Holiday Name</th>
+                                    <th>Date</th>
+                                    <th>Description</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="holidaysTable">
+                                <tr><td colspan="4" class="text-center py-4">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Employee Modal -->
+    <div class="modal fade" id="employeeModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                    <h5 class="modal-title">Add Employee</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="employeeForm">
+                        <div class="mb-3">
+                            <label for="empName" class="form-label">Employee Name</label>
+                            <input type="text" class="form-control" id="empName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="empUsername" class="form-label">Username</label>
+                            <input type="text" class="form-control" id="empUsername" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="empPassword" class="form-label">Password</label>
+                            <input type="password" class="form-control" id="empPassword" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="empEmail" class="form-label">Email</label>
+                            <input type="email" class="form-control" id="empEmail">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="saveEmployee()">Save Employee</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Holiday Modal -->
+    <div class="modal fade" id="holidayModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                    <h5 class="modal-title">Add Holiday</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="holidayForm">
+                        <div class="mb-3">
+                            <label for="holName" class="form-label">Holiday Name</label>
+                            <input type="text" class="form-control" id="holName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="holDate" class="form-label">Date</label>
+                            <input type="date" class="form-control" id="holDate" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="holDescription" class="form-label">Description</label>
+                            <textarea class="form-control" id="holDescription"></textarea>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="saveHoliday()">Save Holiday</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/common.js"></script>
+    <script src="js/admin.js"></script>
+</body>
+</html>

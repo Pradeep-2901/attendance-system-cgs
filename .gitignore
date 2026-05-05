@@ -26,3 +26,6 @@ static/attendance_photos/*
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Local Netlify folder
+.netlify
