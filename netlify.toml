@@ -1,0 +1,47 @@
+[build]
+# Publish the static directory to Netlify
+publish = "static"
+command = "echo 'Static site - no build needed'"
+
+# Single Page Application routing
+[[redirects]]
+from = "/*"
+to = "/login.html"
+status = 200
+
+# API calls should not be redirected
+[[redirects]]
+from = "/api/*"
+to = ":splat"
+status = 200
+force = false
+
+# Don't redirect assets
+[[redirects]]
+from = "/js/*"
+to = ":splat"
+status = 200
+force = false
+
+[[redirects]]
+from = "/css/*"
+to = ":splat"
+status = 200
+force = false
+
+# Cache control - disable caching for HTML (always get fresh version)
+[[headers]]
+for = "/*.html"
+[headers.values]
+Cache-Control = "no-cache, no-store, must-revalidate"
+
+# Cache JS and CSS files for longer
+[[headers]]
+for = "/js/*"
+[headers.values]
+Cache-Control = "public, max-age=604800"
+
+[[headers]]
+for = "/css/*"
+[headers.values]
+Cache-Control = "public, max-age=604800"
