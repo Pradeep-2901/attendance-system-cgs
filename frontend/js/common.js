@@ -168,3 +168,75 @@ const urlParams = new URLSearchParams(window.location.search);
 function getUrlParam(key) {
     return urlParams.get(key);
 }
+
+/**
+ * Unified message display function
+ * Supports error, success, warning, and info messages
+ */
+function showMessage(message, type = "info", duration = 3000) {
+    console.log(`[Message] ${type.toUpperCase()}: ${message}`);
+    
+    // Remove any existing messages
+    const existingMessages = document.querySelectorAll(".alert-notification");
+    existingMessages.forEach(msg => msg.remove());
+    
+    // Create message element
+    const alertDiv = document.createElement("div");
+    alertDiv.className = `alert alert-notification alert-${type === "error" ? "danger" : type}`;
+    alertDiv.setAttribute("role", "alert");
+    alertDiv.textContent = message;
+    
+    // Add styling
+    alertDiv.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 9999;
+        max-width: 400px;
+        padding: 12px 20px;
+        border-radius: 4px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        animation: slideIn 0.3s ease-in-out;
+    `;
+    
+    // Add to document
+    document.body.appendChild(alertDiv);
+    
+    // Auto-remove after duration (skip if duration is 0)
+    if (duration > 0) {
+        setTimeout(() => {
+            alertDiv.style.animation = "slideOut 0.3s ease-in-out";
+            setTimeout(() => alertDiv.remove(), 300);
+        }, duration);
+    }
+}
+
+// Add animation styles if not already present
+if (!document.querySelector("style[data-animations]")) {
+    const style = document.createElement("style");
+    style.setAttribute("data-animations", "true");
+    style.textContent = `
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+}

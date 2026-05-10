@@ -34,6 +34,38 @@ function requireAdmin() {
   }
 }
 
+// Redirect to dashboard if not employee
+function requireEmployee() {
+  const user = getCurrentUser();
+  if (!user.userId) {
+    console.log("[Auth] Not logged in, redirecting to login");
+    window.location.href = "/";
+  }
+  if (user.role !== "employee" && user.role !== "admin") {
+    console.log("[Auth] Not employee, redirecting to login");
+    window.location.href = "/";
+  }
+}
+
+// Update user display in header/navbar
+function updateUserDisplay() {
+  const user = getCurrentUser();
+  
+  // Update username in header if element exists
+  const userDisplay = document.querySelector("[data-user-name]");
+  if (userDisplay && user.employeeName) {
+    userDisplay.textContent = user.employeeName;
+  }
+  
+  // Update role badge if element exists
+  const roleDisplay = document.querySelector("[data-user-role]");
+  if (roleDisplay && user.role) {
+    roleDisplay.textContent = user.role.toUpperCase();
+  }
+  
+  console.log("[Auth] User display updated:", user);
+}
+
 // Show error message to user
 function showError(message) {
   console.error("[UI] Error:", message);

@@ -1,5 +1,5 @@
 // API Configuration
-const API_BASE = "https://cgs-attendance-system.onrender.com";
+const API_BASE = "https://attendance-system-cgs.onrender.com";
 
 console.log("[API] Initializing API client with base URL:", API_BASE);
 
@@ -288,3 +288,58 @@ async function checkOut(latitude, longitude) {
     body: JSON.stringify({ latitude, longitude })
   });
 }
+
+/**
+ * Additional Employee API Routes
+ */
+async function getAttendanceData(userId) {
+  return apiCall(`/api/employee/attendance?user_id=${userId}`);
+}
+
+/**
+ * API Namespace Objects (for cleaner code organization)
+ */
+
+// Admin API methods
+const AdminAPI = {
+  getEmployees,
+  getAttendance,
+  getSettings,
+  updateSettings,
+  getSites,
+  createSite,
+  toggleSite,
+  getGeofenceRequests,
+  reviewGeofenceRequest,
+  getVisitRequests,
+  updateVisitRequest,
+  getRemoteRequests,
+  updateRemoteRequest,
+  getLeaveRequests,
+  reviewLeaveRequest,
+  getHolidays,
+  createHoliday,
+  deleteHoliday
+};
+
+// Employee API methods
+const EmployeeAPI = {
+  getAttendanceData,
+  checkIn,
+  checkOut,
+  getEmployeeVisitRequests,
+  submitVisitRequest,
+  getEmployeeRemoteRequests,
+  submitRemoteRequest
+};
+
+// Authentication API methods
+const AuthAPI = {
+  login,
+  logout,
+  checkAuth,
+  async getSession() {
+    console.log("[API] Getting session");
+    return apiCall("/dashboard");
+  }
+};
