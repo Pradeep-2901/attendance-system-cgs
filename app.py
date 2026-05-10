@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import os
 from datetime import datetime, date, timedelta
 import base64
@@ -15,19 +16,30 @@ from flask_cors import CORS
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # ✅ Enable CORS for Railway deployment
-app.config['SECRET_KEY'] = "demo-secret-key-railway"
-app.secret_key = "demo-secret-key-railway"
+
+# ✅ Enhanced CORS for Render + Netlify production deployment
+if os.getenv('FLASK_ENV') == 'production':
+    CORS(app, supports_credentials=True, origins=[
+        'https://cgs-attendance.netlify.app',
+        'https://*.netlify.app'
+    ])
+else:
+    CORS(app, supports_credentials=True)  # Allow all for development
+
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'demo-secret-key-railway')
+app.secret_key = os.getenv('SECRET_KEY', 'demo-secret-key-railway')
 
 # ✅ CSRF Protection Disabled for Demo
 app.config['WTF_CSRF_ENABLED'] = False
 
-# ✅ Security Configuration
+# ✅ Production-Safe Session Configuration
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-# app.config['SESSION_COOKIE_SECURE'] = True  # ⚠️ Uncomment this line in production when using HTTPS
+app.config['SESSION_COOKIE_SAMESITE'] = 'None' if os.getenv('FLASK_ENV') == 'production' else 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = True if os.getenv('FLASK_ENV') == 'production' else False
+app.config['SESSION_COOKIE_DOMAIN'] = None
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
-# ✅ Add CORS headers for AJAX requests
+# ✅ Add CORS headers for AJAX requests with production support
 @app.after_request
 def after_request(response):
     # Cache control for all responses
@@ -37,6 +49,8 @@ def after_request(response):
     
     # CORS headers - Accept Netlify, localhost, and specific origins
     origin = request.headers.get('Origin')
+    
+    # Production allowed origins
     allowed_origins = [
         'https://cgs-attendance.netlify.app',
         'http://localhost:8000',
@@ -44,40 +58,54 @@ def after_request(response):
         'http://localhost:5000'
     ]
     
-    if origin in allowed_origins or origin and 'netlify.app' in origin:
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-CSRFToken, X-Requested-With, Accept, Authorization'
+    if os.getenv('FLASK_ENV') == 'production':
+        # In production, accept any netlify.app subdomain
+        if origin and 'netlify.app' in origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-CSRFToken, X-Requested-With, Accept, Authorization'
+    else:
+        # Development mode - be more permissive
+        if origin in allowed_origins or (origin and 'netlify.app' in origin):
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-CSRFToken, X-Requested-With, Accept, Authorization'
     
     return response
 
-# ✅ SQLite Configuration (Demo Mode)
-DB_PATH = 'attendance_system.db'
+# ✅ PostgreSQL Configuration for Render + Neon
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-class DictRow(dict):
-    """Wrapper to make sqlite3.Row objects behave like dictionaries with .get() support"""
-    def __init__(self, cursor, row):
-        self.keys_ = [description[0] for description in cursor.description]
-        for k, v in zip(self.keys_, row):
-            self[k] = v
-    
-    def get(self, key, default=None):
-        """Dictionary-like get method"""
-        return self.get(key, default) if key in self else default
-
-def dict_factory(cursor, row):
-    """Custom row factory that returns dict-like objects"""
-    d = {}
-    for idx, col in enumerate([c[0] for c in cursor.description]):
-        d[col] = row[idx]
-    return d
+# For development, provide a fallback or require it to be set
+if not DATABASE_URL and os.getenv('FLASK_ENV') != 'production':
+    print("⚠️  WARNING: DATABASE_URL not set. Using development mode.")
+    print("   Set DATABASE_URL for PostgreSQL: postgresql://user:password@host:5432/dbname")
 
 def get_db_connection():
-    """Create SQLite database connection"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = dict_factory  # Use dict factory instead of Row
-    return conn
+    """Create PostgreSQL database connection with proper SSL handling"""
+    try:
+        if DATABASE_URL:
+            # For Neon + Render, use sslmode='require'
+            # Use RealDictCursor to return rows as dictionaries instead of tuples
+            conn = psycopg2.connect(DATABASE_URL, sslmode='require', cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            # Fallback for local development (may not work - warn user)
+            raise Exception("DATABASE_URL not configured. PostgreSQL connection required.")
+        
+        # Return connection with RealDictCursor factory
+        return conn
+    except psycopg2.OperationalError as e:
+        print(f"❌ Database connection error: {e}")
+        raise
+
+def dict_factory(cursor, row):
+    """Convert PostgreSQL rows to dictionaries for compatibility"""
+    d = {}
+    for idx, col in enumerate([desc[0] for desc in cursor.description]):
+        d[col] = row[idx]
+    return d
 
 # ✅ Enable CSRF Protection (disabled via config)
 csrf = CSRFProtect(app)
@@ -353,7 +381,7 @@ def geocode_address(address):
 def get_company_setting(cursor, setting_name):
     """Get a company setting value"""
     try:
-        cursor.execute("SELECT setting_value FROM company_settings WHERE setting_name = ?",  (setting_name,))
+        cursor.execute("SELECT setting_value FROM company_settings WHERE setting_name = %s",  (setting_name,))
         result = cursor.fetchone()
         return result['setting_value'] if result else None
     except Exception:
@@ -438,7 +466,7 @@ def login():
         cursor = conn.cursor()
         
         # Check credentials AND role match
-        cursor.execute("SELECT * FROM users WHERE username = ? AND role = ?",  
+        cursor.execute("SELECT * FROM users WHERE username = %s AND role = %s",  
                       (username, requested_role))
         user = cursor.fetchone()
         
@@ -507,7 +535,7 @@ def admin_dashboard():
         cursor.execute("SELECT COUNT(*) as total FROM users WHERE role = 'employee'")
         total_employees = cursor.fetchone()['total']
         today = date.today()
-        cursor.execute("SELECT COUNT(*) as today_attendance FROM attendance WHERE date = ?",  (today,))
+        cursor.execute("SELECT COUNT(*) as today_attendance FROM attendance WHERE date = %s",  (today,))
         today_attendance = cursor.fetchone()['today_attendance']
 
         # Pending comp-off
@@ -592,15 +620,15 @@ def create_employee():
         cursor = conn.cursor()
         
         # Check if username already exists
-        cursor.execute("SELECT username FROM users WHERE username = ?", (username,))
+        cursor.execute("SELECT username FROM users WHERE username = %s", (username,))
         if cursor.fetchone():
             conn.close()
             return jsonify({'success': False, 'message': 'Username already exists! Please choose a different username.'}), 400
         
-        # Generate next user_id
-        cursor.execute("SELECT MAX(CAST(user_id AS UNSIGNED)) FROM users WHERE user_id REGEXP '^[0-9]+$'")
+        # Generate next user_id (PostgreSQL compatible)
+        cursor.execute("SELECT MAX(CAST(user_id AS INTEGER)) FROM users WHERE user_id::text ~ '^[0-9]+$'")
         result = cursor.fetchone()
-        next_id = str((result[0] or 0) + 1)
+        next_id = str((result[0] if result and result[0] else 0) + 1)
         
         # Geocode remote address if provided
         remote_lat = remote_lon = None
@@ -616,10 +644,10 @@ def create_employee():
         # Insert new employee with geofencing support
         hashed_password = generate_password_hash(password)
         cursor.execute("""
-            INSERT INTO users (user_id, employee_name, username, password, role, work_mode, 
+            INSERT INTO users (employee_name, username, password, role, work_mode, 
                              remote_address, remote_lat, remote_lon) 
-            VALUES (?, ?, ?, ?, 'employee', ?, ?, ?, ?)
-        """, (next_id, name, username, hashed_password, work_mode, remote_address, remote_lat, remote_lon))
+            VALUES (%s, %s, %s, 'employee', %s, %s, %s, %s)
+        """, (name, username, hashed_password, work_mode, remote_address, remote_lat, remote_lon))
         
         conn.commit()
         conn.close()
@@ -643,7 +671,7 @@ def delete_employee(user_id):
         cursor = conn.cursor()
         
         # Get employee name before deletion
-        cursor.execute("SELECT employee_name FROM users WHERE user_id = ? AND role = 'employee'", (user_id,))
+        cursor.execute("SELECT employee_name FROM users WHERE user_id = %s AND role = 'employee'", (user_id,))
         employee = cursor.fetchone()
         
         if not employee:
@@ -651,10 +679,10 @@ def delete_employee(user_id):
             return jsonify({'success': False, 'message': 'Employee not found!'}), 404
         
         # Delete employee's attendance records first (foreign key constraint)
-        cursor.execute("DELETE FROM attendance WHERE user_id = ?", (user_id,))
+        cursor.execute("DELETE FROM attendance WHERE user_id = %s", (user_id,))
         
         # Delete employee
-        cursor.execute("DELETE FROM users WHERE user_id = ? AND role = 'employee'", (user_id,))
+        cursor.execute("DELETE FROM users WHERE user_id = %s AND role = 'employee'", (user_id,))
         
         conn.commit()
         conn.close()
@@ -674,7 +702,7 @@ def get_employee_details(user_id):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM users WHERE user_id = ? AND role = 'employee'", (user_id,))
+        cursor.execute("SELECT * FROM users WHERE user_id = %s AND role = 'employee'", (user_id,))
         employee = cursor.fetchone()
         conn.close()
         
@@ -726,7 +754,7 @@ def update_employee(user_id):
         cursor = conn.cursor()
         
         # Check if username exists for other users
-        cursor.execute("SELECT user_id FROM users WHERE username = ? AND user_id != ?", (username, user_id))
+        cursor.execute("SELECT user_id FROM users WHERE username = %s AND user_id != %s", (username, user_id))
         if cursor.fetchone():
             conn.close()
             return jsonify({'success': False, 'message': 'Username already exists! Please choose a different username.'}), 400
@@ -747,16 +775,16 @@ def update_employee(user_id):
             hashed_password = generate_password_hash(password)
             cursor.execute("""
                 UPDATE users 
-                SET employee_name = ?, username = ?, password = ?, work_mode = ?,
-                    remote_address = ?, remote_lat = ?, remote_lon = ?
-                WHERE user_id = ? AND role = 'employee'
+                SET employee_name = %s, username = %s, password = %s, work_mode = %s,
+                    remote_address = %s, remote_lat = %s, remote_lon = %s
+                WHERE user_id = %s AND role = 'employee'
             """, (name, username, hashed_password, work_mode, remote_address, remote_lat, remote_lon, user_id))
         else:
             cursor.execute("""
                 UPDATE users 
-                SET employee_name = ?, username = ?, work_mode = ?,
-                    remote_address = ?, remote_lat = ?, remote_lon = ?
-                WHERE user_id = ? AND role = 'employee'
+                SET employee_name = %s, username = %s, work_mode = %s,
+                    remote_address = %s, remote_lat = %s, remote_lon = %s
+                WHERE user_id = %s AND role = 'employee'
             """, (name, username, work_mode, remote_address, remote_lat, remote_lon, user_id))
         
         conn.commit()
@@ -798,15 +826,15 @@ def get_attendance():
         params = []
         
         if selected_employee:
-            query += " AND a.user_id = ?"
+            query += " AND a.user_id = %s"
             params.append(selected_employee)
         
         if start_date:
-            query += " AND a.date >= ?"
+            query += " AND a.date >= %s"
             params.append(start_date)
         
         if end_date:
-            query += " AND a.date <= ?"
+            query += " AND a.date <= %s"
             params.append(end_date)
         
         query += " ORDER BY a.date DESC, a.check_in_time DESC LIMIT 100"
@@ -858,7 +886,7 @@ def get_employee_report(user_id):
         cursor = conn.cursor()
         
         # Get employee details
-        cursor.execute("SELECT * FROM users WHERE user_id = ? AND role = 'employee'", (user_id,))
+        cursor.execute("SELECT * FROM users WHERE user_id = %s AND role = 'employee'", (user_id,))
         employee = cursor.fetchone()
         
         if not employee:
@@ -902,12 +930,12 @@ def get_employee_report(user_id):
         # Get monthly stats
         cursor.execute("""
             SELECT 
-                strftime('%Y-%m', date) as month,
+                TO_CHAR(date, 'YYYY-MM') as month,
                 COUNT(*) as days_present,
-                AVG(CAST(strftime('%H', check_in_time) AS INTEGER)) as avg_checkin_hour
+                AVG(EXTRACT(HOUR FROM check_in_time)::INTEGER) as avg_checkin_hour
             FROM attendance 
-            WHERE user_id = ? AND check_in_time IS NOT NULL
-            GROUP BY strftime('%Y-%m', date)
+            WHERE user_id = %s AND check_in_time IS NOT NULL
+            GROUP BY TO_CHAR(date, 'YYYY-MM')
             ORDER BY month DESC
             LIMIT 6
         """, (user_id,))
@@ -977,7 +1005,7 @@ def review_geofence_request(request_id):
         return redirect(url_for('admin_geofence_requests'))
     try:
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute("SELECT * FROM geofence_requests WHERE request_id = ?",  (request_id,))
+        cursor.execute("SELECT * FROM geofence_requests WHERE request_id = %s",  (request_id,))
         req = cursor.fetchone()
         if not req:
             conn.close(); flash('Request not found','error'); return redirect(url_for('admin_geofence_requests'))
@@ -985,11 +1013,11 @@ def review_geofence_request(request_id):
             conn.close(); flash('Request already reviewed','error'); return redirect(url_for('admin_geofence_requests'))
         cursor2 = conn.cursor()
         if decision == 'approve':
-            cursor2.execute("UPDATE geofence_requests SET status='approved', reviewed_by=?, review_date=datetime('now') WHERE request_id=?", (admin_id, request_id))
-            cursor2.execute("UPDATE users SET geofence_status='approved', geofence_lat=?, geofence_lon=? WHERE user_id=?", (req['latitude'], req['longitude'], req['user_id']))
+            cursor2.execute("UPDATE geofence_requests SET status='approved', reviewed_by=%s, review_date=CURRENT_TIMESTAMP WHERE request_id=%s", (admin_id, request_id))
+            cursor2.execute("UPDATE users SET geofence_status='approved', geofence_lat=%s, geofence_lon=%s WHERE user_id=%s", (req['latitude'], req['longitude'], req['user_id']))
             flash('Geofence approved','success')
         else:
-            cursor2.execute("UPDATE geofence_requests SET status='rejected', reviewed_by=?, review_date=datetime('now') WHERE request_id=?", (admin_id, request_id))
+            cursor2.execute("UPDATE geofence_requests SET status='rejected', reviewed_by=%s, review_date=CURRENT_TIMESTAMP WHERE request_id=%s", (admin_id, request_id))
             cursor2.execute("UPDATE users SET geofence_status='rejected' WHERE user_id=%s", (req['user_id'],))
             flash('Geofence rejected','info')
         conn.commit(); conn.close()
@@ -1150,7 +1178,7 @@ def create_site():
         
         cursor.execute("""
             INSERT INTO sites (site_name, site_address, site_lat, site_lon, site_radius, site_description)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """, (site_name, site_address, geocode_result['lat'], geocode_result['lon'], site_radius, site_description))
         
         conn.commit()
@@ -1169,7 +1197,7 @@ def toggle_site_status(site_id):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT is_active FROM sites WHERE id = ?", (site_id,))
+        cursor.execute("SELECT is_active FROM sites WHERE id = %s", (site_id,))
         site = cursor.fetchone()
         
         if not site:
@@ -1179,7 +1207,7 @@ def toggle_site_status(site_id):
         current_status = site[0] if isinstance(site, tuple) else site.get('is_active')
         new_status = not current_status
         
-        cursor.execute("UPDATE sites SET is_active = ? WHERE id = ?", (new_status, site_id))
+        cursor.execute("UPDATE sites SET is_active = %s WHERE id = %s", (new_status, site_id))
         conn.commit()
         conn.close()
         
@@ -1250,7 +1278,7 @@ def update_visit_request(request_id):
         
         cursor.execute("""
             UPDATE site_visits 
-            SET status = ?, admin_notes = ?, approved_by = ?, approved_date = datetime('now')
+            SET status = ?, admin_notes = ?, approved_by = ?, approved_date = CURRENT_TIMESTAMP
             WHERE id = ?
         """, (new_status, admin_notes, session['user_id'], request_id))
         
@@ -1320,7 +1348,7 @@ def update_remote_request(request_id):
         
         cursor.execute("""
             UPDATE remote_work_requests 
-            SET status = ?, review_notes = ?, reviewed_by = ?, reviewed_at = datetime('now')
+            SET status = ?, review_notes = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
             WHERE id = ?
         """, (new_status, review_notes, session['user_id'], request_id))
         
@@ -1432,7 +1460,7 @@ def submit_visit_request():
         # Insert new request
         cursor.execute("""
             INSERT INTO site_visits (user_id, site_id, visit_date, purpose, status, requested_at)
-            VALUES (?, ?, ?, ?, 'Pending', datetime('now'))
+            VALUES (%s, %s, %s, %s, 'Pending', CURRENT_TIMESTAMP)
         """, (session['user_id'], site_id, visit_date, purpose))
         
         conn.commit()
@@ -1535,7 +1563,7 @@ def submit_remote_request():
         # Insert new request
         cursor.execute("""
             INSERT INTO remote_work_requests (user_id, start_date, end_date, address, lat, lon, reason, status, requested_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', datetime('now'))
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'Pending', CURRENT_TIMESTAMP)
         """, (session['user_id'], start_date, end_date, address, lat, lon, reason))
         
         conn.commit()
@@ -1562,9 +1590,9 @@ def dashboard():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM attendance WHERE user_id = ? AND date = ?",  (user_id, today))
+        cursor.execute("SELECT * FROM attendance WHERE user_id = %s AND date = %s",  (user_id, today))
         today_attendance = cursor.fetchone()
-        cursor.execute("SELECT geofence_status, compoff_balance FROM users WHERE user_id = ?",  (user_id,))
+        cursor.execute("SELECT geofence_status, compoff_balance FROM users WHERE user_id = %s",  (user_id,))
         row = cursor.fetchone()
         geofence_status = row['geofence_status'] if row else 'none'
         compoff_balance = row.get('compoff_balance',0) if row else 0
@@ -1673,7 +1701,7 @@ def checkin():
         now = datetime.now()
 
         # Check existing
-        cursor.execute("SELECT check_in_time FROM attendance WHERE user_id=? AND date=?",  (user_id, str(today)))
+        cursor.execute("SELECT check_in_time FROM attendance WHERE user_id=%s AND date=%s",  (user_id, str(today)))
         existing = cursor.fetchone()
         if existing and existing[0]:
             return jsonify({'status': 'error', 'message': 'Already checked in today.'}), 200
@@ -1703,7 +1731,7 @@ def checkin():
             pass
 
         # Determine attendance type
-        cursor.execute("SELECT 1 FROM compoff_requests WHERE user_id=? AND work_date=? AND status='Approved'",  (user_id, str(today)))
+        cursor.execute("SELECT 1 FROM compoff_requests WHERE user_id=%s AND work_date=%s AND status='Approved'",  (user_id, str(today)))
         is_compoff = cursor.fetchone()
         attendance_type = 'Comp-Off' if is_compoff else 'Regular'
 
@@ -1720,7 +1748,7 @@ def checkin():
                 INSERT INTO attendance 
                 (user_id, date, check_in_time, check_in_latitude, check_in_longitude, 
                  check_in_address, image_path_checkin, attendance_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,  (user_id, str(today), str(now), latitude, longitude, address, image_filename, attendance_type))
         
         conn.commit()
@@ -1873,11 +1901,11 @@ def view_attendance():
         # Get monthly statistics for charts
         cursor.execute("""
             SELECT 
-                strftime('%Y-%m', date) as month,
+                TO_CHAR(date, 'YYYY-MM') as month,
                 COUNT(*) as days_present
             FROM attendance 
-            WHERE user_id = ? AND check_in_time IS NOT NULL
-            GROUP BY strftime('%Y-%m', date)
+            WHERE user_id = %s AND check_in_time IS NOT NULL
+            GROUP BY TO_CHAR(date, 'YYYY-MM')
             ORDER BY month DESC
             LIMIT 6
         """,  (user_id,))
@@ -1886,11 +1914,11 @@ def view_attendance():
         # Get average check-in times
         cursor.execute("""
             SELECT 
-                strftime('%Y-%m', date) as month,
-                AVG(CAST(strftime('%H', check_in_time) AS INTEGER)) as avg_hour
+                TO_CHAR(date, 'YYYY-MM') as month,
+                AVG(EXTRACT(HOUR FROM check_in_time)::INTEGER) as avg_hour
             FROM attendance 
-            WHERE user_id = ? AND check_in_time IS NOT NULL
-            GROUP BY strftime('%Y-%m', date)
+            WHERE user_id = %s AND check_in_time IS NOT NULL
+            GROUP BY TO_CHAR(date, 'YYYY-MM')
             ORDER BY month DESC
             LIMIT 6
         """,  (user_id,))
@@ -1947,7 +1975,7 @@ def request_geofence():
         lat = float(lat); lon = float(lon)
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT geofence_status FROM users WHERE user_id = ?",  (user_id,))
+        cursor.execute("SELECT geofence_status FROM users WHERE user_id = %s",  (user_id,))
         row = cursor.fetchone()
         if not row:
             conn.close(); flash('Geofence request failed: user not found','error')
@@ -2196,7 +2224,7 @@ def review_leave_request(leave_id):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM leave_requests WHERE leave_id = ?", (leave_id,))
+        cursor.execute("SELECT * FROM leave_requests WHERE leave_id = %s", (leave_id,))
         req = cursor.fetchone()
         
         if not req:
@@ -2225,7 +2253,7 @@ def review_leave_request(leave_id):
         cursor2 = conn.cursor()
         if decision == 'Approve':
             cursor2.execute("""
-                UPDATE leave_requests SET status='Approved', reviewed_by=?, review_date=datetime('now')
+                UPDATE leave_requests SET status='Approved', reviewed_by=?, review_date=CURRENT_TIMESTAMP
                 WHERE leave_id=?
             """, (admin_id, leave_id))
             
@@ -2244,7 +2272,7 @@ def review_leave_request(leave_id):
             message = f'Leave request #{leave_id} approved for {days} day(s).'
         else:
             cursor2.execute("""
-                UPDATE leave_requests SET status='Rejected', reviewed_by=?, review_date=datetime('now')
+                UPDATE leave_requests SET status='Rejected', reviewed_by=?, review_date=CURRENT_TIMESTAMP
                 WHERE leave_id=?
             """, (admin_id, leave_id))
             message = f'Leave request #{leave_id} rejected.'
@@ -2313,8 +2341,8 @@ def create_holiday():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT OR REPLACE INTO holidays (holiday_date, holiday_name) 
-            VALUES (?, ?)
+            INSERT INTO holidays (holiday_date, holiday_name) 
+            VALUES (%s, %s)
         """, (hdate, name))
         conn.commit()
         conn.close()
@@ -2333,7 +2361,7 @@ def delete_holiday(holiday_id):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        cursor.execute("DELETE FROM holidays WHERE holiday_id = ?", (holiday_id,))
+        cursor.execute("DELETE FROM holidays WHERE holiday_id = %s", (holiday_id,))
         conn.commit()
         conn.close()
         
@@ -2363,7 +2391,7 @@ def employee_attendance_data(user_id):
         if end_date < start_date:
             return jsonify({'error':'Invalid range'}), 400
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM users WHERE user_id = ? AND role = 'employee'",  (user_id,))
+        cursor.execute("SELECT user_id FROM users WHERE user_id = %s AND role = 'employee'",  (user_id,))
         if not cursor.fetchone():
             conn.close(); return jsonify({'error':'User not found'}), 404
         # Attendance rows (include type)
@@ -2460,12 +2488,12 @@ def is_sunday(d: date) -> bool:
 
 def get_holidays_between(cursor, start_d: date, end_d: date):
     """Return set of holiday dates between range inclusive."""
-    cursor.execute("SELECT holiday_date FROM holidays WHERE holiday_date BETWEEN ? AND ?",  (start_d, end_d))
+    cursor.execute("SELECT holiday_date FROM holidays WHERE holiday_date BETWEEN %s AND %s",  (start_d, end_d))
     return {row['holiday_date'] for row in cursor.fetchall()}
 
 
 def is_holiday(cursor, d: date) -> bool:
-    cursor.execute("SELECT 1 FROM holidays WHERE holiday_date = ?",  (d,))
+    cursor.execute("SELECT 1 FROM holidays WHERE holiday_date = %s",  (d,))
     return cursor.fetchone() is not None
 
 
@@ -2525,7 +2553,7 @@ def request_compoff():
             cursor2 = conn.cursor()
             cursor2.execute("""
                 INSERT INTO compoff_requests (user_id, work_date, reason)
-                VALUES (?,?,?)
+                VALUES (%s,%s,%s)
             """, (user_id, work_date, reason))
             conn.commit(); conn.close(); flash('Comp-off request submitted','success'); return redirect(url_for('request_compoff'))
         # GET flow
@@ -2603,7 +2631,7 @@ def review_compoff(request_id):
     admin_id = session.get('user_id')
     try:
         conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute("SELECT * FROM compoff_requests WHERE request_id = ?",  (request_id,))
+        cursor.execute("SELECT * FROM compoff_requests WHERE request_id = %s",  (request_id,))
         req = cursor.fetchone()
         if not req:
             conn.close(); flash('Request not found','error'); return redirect(url_for('admin_compoff_requests'))
@@ -2613,14 +2641,14 @@ def review_compoff(request_id):
         if decision == 'Approve':
             cursor2.execute("""
                 UPDATE compoff_requests
-                SET status='Approved', reviewed_by=?, review_date=datetime('now')
+                SET status='Approved', reviewed_by=?, review_date=CURRENT_TIMESTAMP
                 WHERE request_id=?
             """, (admin_id, request_id))
             flash(f'Comp-off request #{request_id} approved','success')
         else:
             cursor2.execute("""
                 UPDATE compoff_requests
-                SET status='Rejected', reviewed_by=?, review_date=datetime('now')
+                SET status='Rejected', reviewed_by=?, review_date=CURRENT_TIMESTAMP
                 WHERE request_id=?
             """, (admin_id, request_id))
             flash(f'Comp-off request #{request_id} rejected','info')
