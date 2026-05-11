@@ -12,7 +12,32 @@ let currentAttendanceData = {
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', async () => {
+    console.log("[Dashboard] DOMContentLoaded - checking auth");
+    
     if (!await requireEmployee()) return;
+    
+    console.log("[Dashboard] Auth check passed, verifying session with backend");
+    
+    // Critical: Verify backend session is available before loading data
+    try {
+        const sessionCheck = await AuthAPI.getSession();
+        if (!sessionCheck.success) {
+            console.error("[Dashboard] Backend session check failed:", sessionCheck);
+            showMessage("Session verification failed. Redirecting to login...", "error");
+            setTimeout(() => {
+                window.location.href = "/";
+            }, 1000);
+            return;
+        }
+        console.log("[Dashboard] Backend session verified successfully");
+    } catch (error) {
+        console.error("[Dashboard] Session verification error:", error);
+        showMessage("Session error. Redirecting to login...", "error");
+        setTimeout(() => {
+            window.location.href = "/";
+        }, 1000);
+        return;
+    }
     
     updateUserDisplay();
     await loadDashboardData();

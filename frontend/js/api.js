@@ -340,6 +340,6 @@ const AuthAPI = {
   checkAuth,
   async getSession() {
     console.log("[API] Getting session");
-    return apiCall("/dashboard");
+    return apiCall("/session");
   }
 };

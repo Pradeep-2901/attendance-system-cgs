@@ -10,7 +10,6 @@ import math
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_wtf.csrf import CSRFProtect
-from flask_cors import CORS
 
 # Load environment variables
 load_dotenv()
@@ -18,13 +17,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # ✅ Enhanced CORS for Render + Netlify production deployment
-if os.getenv('FLASK_ENV') == 'production':
-    CORS(app, supports_credentials=True, origins=[
-        'https://cgs-attendance.netlify.app',
-        'https://*.netlify.app'
-    ])
-else:
-    CORS(app, supports_credentials=True)  # Allow all for development
+# Note: CORS handling is now done in after_request handler for consistency
 
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'demo-secret-key-railway')
 app.secret_key = os.getenv('SECRET_KEY', 'demo-secret-key-railway')
@@ -36,7 +29,9 @@ app.config['WTF_CSRF_ENABLED'] = False
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'None' if os.getenv('FLASK_ENV') == 'production' else 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = True if os.getenv('FLASK_ENV') == 'production' else False
+# For Netlify + Render: Domain should NOT be set to allow cross-origin cookies
 app.config['SESSION_COOKIE_DOMAIN'] = None
+app.config['SESSION_REFRESH_EACH_REQUEST'] = True  # Refresh session on each request to prevent expiry
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 # ✅ Add CORS headers for AJAX requests with production support
@@ -58,13 +53,22 @@ def after_request(response):
         'http://localhost:5000'
     ]
     
-    if os.getenv('FLASK_ENV') == 'production':
-        # In production, accept any netlify.app subdomain
-        if origin and 'netlify.app' in origin:
+    # PRODUCTION MODE: Use explicit production origin
+    is_production = os.getenv('FLASK_ENV') == 'production'
+    
+    if is_production:
+        # In production, ONLY accept exact Netlify domain
+        if origin == 'https://cgs-attendance.netlify.app':
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-CSRFToken, X-Requested-With, Accept, Authorization'
+            # Debug: Log successful CORS
+            if 'user_id' in session:
+                print(f"✅ CORS + Session OK: {request.method} {request.path} for user {session.get('username')}")
+        # Log non-matching origins in production
+        elif origin:
+            print(f"⚠️  Rejected CORS origin in production: {origin}")
     else:
         # Development mode - be more permissive
         if origin in allowed_origins or (origin and 'netlify.app' in origin):
@@ -72,6 +76,10 @@ def after_request(response):
             response.headers['Access-Control-Allow-Credentials'] = 'true'
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-CSRFToken, X-Requested-With, Accept, Authorization'
+    
+    # Debug: Show if Set-Cookie header is being sent
+    if 'Set-Cookie' in response.headers:
+        print(f"🍪 Set-Cookie sent in {request.method} {request.path}")
     
     return response
 
@@ -158,6 +166,8 @@ def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'role' not in session or session.get('role') != 'admin':
+            # Log the failed auth attempt for debugging
+            print(f"⚠️ Admin auth failed: session keys = {list(session.keys())}, role = {session.get('role')}")
             # Return JSON for API clients
             return jsonify({
                 'success': False,
@@ -176,6 +186,8 @@ def employee_required(f):
             return '', 200
 
         if 'role' not in session or session.get('role') not in ('employee', 'admin'):
+            # Log the failed auth attempt for debugging
+            print(f"⚠️ Employee auth failed: session keys = {list(session.keys())}, role = {session.get('role')}")
             # Return JSON for API clients
             return jsonify({
                 'success': False,
@@ -481,6 +493,7 @@ def login():
             session['role'] = user['role']
             session['employee_name'] = user['employee_name'] if user['employee_name'] else user['username']
             session.permanent = True
+            session.modified = True  # 🔑 CRITICAL: Force Flask to set Set-Cookie header
             
             # Log successful login
             print(f"\n[LOGIN] User logged in: {user['username']} (Role: {user['role']}, ID: {user['user_id']})\n")
@@ -523,6 +536,21 @@ def logout():
     session.clear()
     flash(f'Goodbye {username}!', 'success')
     return redirect(url_for('home'))
+
+# ✅ Get current session info (for API clients)
+@app.route('/session', methods=['GET'])
+@login_required
+def get_session():
+    """Return current session information"""
+    return jsonify({
+        'success': True,
+        'session': {
+            'user_id': session.get('user_id'),
+            'username': session.get('username'),
+            'role': session.get('role'),
+            'employee_name': session.get('employee_name')
+        }
+    })
 
 # ====================== ADMIN ROUTES ======================
 

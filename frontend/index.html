@@ -285,36 +285,34 @@
                     return;
                 }
 
-                // Get session data to confirm login
-                const sessionResult = await AuthAPI.getSession();
-                if (!sessionResult.success) {
-                    showMessage("Failed to establish session", "error");
-                    return;
-                }
-
-                const sessionData = sessionResult.data;
-
-                // Store user info in localStorage
+                // Store login response immediately (don't wait for session confirmation)
                 const userInfo = {
-                    userId: sessionData.session?.user_id,
-                    username: sessionData.session?.username,
-                    employeeName: sessionData.session?.employee_name,
-                    role: sessionData.session?.role
+                    userId: result.data.user_id,
+                    username: result.data.username,
+                    employeeName: result.data.employee_name,
+                    role: result.data.role
                 };
 
+                // Store in localStorage for client-side auth checks
+                localStorage.setItem("userId", userInfo.userId);
+                localStorage.setItem("username", userInfo.username);
+                localStorage.setItem("employeeName", userInfo.employeeName);
+                localStorage.setItem("role", userInfo.role);
+                
+                // Also store as cgs_user for compatibility
                 localStorage.setItem("cgs_user", JSON.stringify(userInfo));
                 localStorage.setItem("cgs_role", userInfo.role);
 
                 showMessage(`Welcome ${userInfo.employeeName || username}!`, "success");
 
-                // Redirect based on role
+                // Redirect based on role - add delay to ensure cookies are set
                 setTimeout(() => {
                     if (userInfo.role === "admin") {
                         window.location.href = "/admin.html";
                     } else {
                         window.location.href = "/dashboard.html";
                     }
-                }, 1000);
+                }, 500);
 
             } catch (error) {
                 showMessage("Login error: " + error.message, "error");
