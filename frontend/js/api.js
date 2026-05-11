@@ -96,23 +96,23 @@ async function login(username, password, role) {
   
   if (!result.success) {
     console.error("[API] Login failed:", result.error);
-    return { success: false, message: result.error || "Login failed" };
+    return { success: false, error: result.error || "Login failed" };
   }
   
   if (result.data.success) {
     console.log("[API] Login successful");
-    // Store user data in localStorage
-    if (result.data.data) {
-      localStorage.setItem("userId", result.data.data.user_id || username);
-      localStorage.setItem("username", result.data.data.username || username);
-      localStorage.setItem("role", role);
-      localStorage.setItem("employeeName", result.data.data.employee_name || "");
-    }
-    return { success: true, message: "Login successful" };
+    console.log("[API] User data:", result.data);
+    // Store user data in localStorage (backend returns at top level of result.data)
+    localStorage.setItem("userId", result.data.user_id || username);
+    localStorage.setItem("username", result.data.username || username);
+    localStorage.setItem("role", result.data.role || role);
+    localStorage.setItem("employeeName", result.data.employee_name || "");
+    // Return success WITH the user data so handleLogin can access it
+    return { success: true, data: result.data, message: "Login successful" };
   }
   
   console.error("[API] Login returned false:", result.data);
-  return { success: false, message: result.data.message || "Login failed" };
+  return { success: false, error: result.data.message || "Login failed" };
 }
 
 /**

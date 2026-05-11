@@ -285,13 +285,15 @@
                     return;
                 }
 
-                // Store login response immediately (don't wait for session confirmation)
+                // Store login response immediately (result.data contains {user_id, username, role, employee_name, success})
                 const userInfo = {
                     userId: result.data.user_id,
                     username: result.data.username,
                     employeeName: result.data.employee_name,
                     role: result.data.role
                 };
+                
+                console.log("[Index] Login successful, user data:", userInfo);
 
                 // Store in localStorage for client-side auth checks
                 localStorage.setItem("userId", userInfo.userId);
