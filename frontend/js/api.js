@@ -99,8 +99,13 @@ async function login(username, password, role) {
     return { success: false, error: result.error || "Login failed" };
   }
   
+  console.log("[API] Checking result.data.success:", result.data.success);
+  console.log("[API] result.data keys:", Object.keys(result.data || {}));
+  console.log("[API] Full result.data:", JSON.stringify(result.data));
+  
   if (result.data.success) {
     console.log("[API] Login successful");
+    console.log("[API] About to extract user_id:", result.data.user_id);
     console.log("[API] User data:", result.data);
     // Store user data in localStorage (backend returns at top level of result.data)
     localStorage.setItem("userId", result.data.user_id || username);
@@ -108,7 +113,9 @@ async function login(username, password, role) {
     localStorage.setItem("role", result.data.role || role);
     localStorage.setItem("employeeName", result.data.employee_name || "");
     // Return success WITH the user data so handleLogin can access it
-    return { success: true, data: result.data, message: "Login successful" };
+    const returnValue = { success: true, data: result.data, message: "Login successful" };
+    console.log("[API] login() returning:", JSON.stringify(returnValue));
+    return returnValue;
   }
   
   console.error("[API] Login returned false:", result.data);

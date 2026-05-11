@@ -279,6 +279,9 @@
 
             try {
                 const result = await AuthAPI.login(username, password, role);
+                console.log("[Index] Result from AuthAPI.login():", result);
+                console.log("[Index] result.success:", result.success);
+                console.log("[Index] result.data:", result.data);
 
                 if (!result.success) {
                     showMessage(result.error || "Login failed", "error");
@@ -286,6 +289,10 @@
                 }
 
                 // Store login response immediately (result.data contains {user_id, username, role, employee_name, success})
+                console.log("[Index] About to access result.data.user_id");
+                console.log("[Index] result.data type:", typeof result.data);
+                console.log("[Index] result.data keys:", result.data ? Object.keys(result.data) : "NULL");
+                
                 const userInfo = {
                     userId: result.data.user_id,
                     username: result.data.username,
